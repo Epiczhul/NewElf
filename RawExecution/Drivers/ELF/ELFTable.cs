@@ -10,6 +10,8 @@ namespace RawExecution.Drivers.ELF
 {
     public static unsafe class CosmosCallsImpl
     {
+        public static char** Args = null;
+        public static int ArgCount = 0;
         static List<FileStream> OpenHandles = new List<FileStream>();
         // struct to hold function data for each class
         [StructLayout(LayoutKind.Sequential)]
@@ -59,11 +61,8 @@ namespace RawExecution.Drivers.ELF
             public delegate* unmanaged[Cdecl]<C_FILE*, int> FileTellFunc;
             public delegate* unmanaged[Cdecl]<C_FILE*, int> FileFlushFunc;
 
-            // graphics functions
-            public delegate* unmanaged[Cdecl]<uint, uint, void> CreateCanvasFunc;
-            public delegate* unmanaged[Cdecl]<uint, void> ClearCanvasFunc;
-            public delegate* unmanaged[Cdecl]<void> DisplayCanvasFunc;
-            public delegate* unmanaged[Cdecl]<uint, int, int, void> DrawPixelFunc;
+            // misc functions
+            public delegate* unmanaged[Cdecl]<int*, char***> GetArgsFunc;
 
             public FunctionClass(
                 delegate* unmanaged[Cdecl]<char*, void> printLineFunc,
@@ -83,6 +82,7 @@ namespace RawExecution.Drivers.ELF
                 delegate* unmanaged[Cdecl]<double, void> printNoLineDoubleFunc,
                 delegate* unmanaged[Cdecl]<void> clearFunc,
                 delegate* unmanaged[Cdecl]<int, int, void> setCursorPositionFunc,
+                //delegate* unmanaged[Cdecl]<int> getCharFunc,
 
                 delegate* unmanaged[Cdecl]<uint, void*> allocFunc,
                 delegate* unmanaged[Cdecl]<void*, void> freeFunc,
@@ -94,10 +94,7 @@ namespace RawExecution.Drivers.ELF
                 delegate* unmanaged[Cdecl]<C_FILE*, int, int, int> fileSeekFunc,
                 delegate* unmanaged[Cdecl]<C_FILE*, int> fileTellFunc,
                 delegate* unmanaged[Cdecl]<C_FILE*, int> fileFlushFunc,
-                delegate* unmanaged[Cdecl]<uint, uint, void> createCanvasFunc,
-                delegate* unmanaged[Cdecl]<uint, void> clearCanvasFunc,
-                delegate* unmanaged[Cdecl]<void> displayCanvasFunc,
-                delegate* unmanaged[Cdecl]<uint, int, int, void> drawPixelFunc
+                delegate* unmanaged[Cdecl]<int*, char***> getArgsFunc
                 )
 
             {
@@ -118,6 +115,7 @@ namespace RawExecution.Drivers.ELF
                 PrintNoLineDoubleFunc = printNoLineDoubleFunc;
                 ClearFunc = clearFunc;
                 SetCursorPositionFunc = setCursorPositionFunc;
+                //GetCharFunc = getCharFunc;
 
                 AllocFunc = allocFunc;
                 FreeFunc = freeFunc;
@@ -130,10 +128,7 @@ namespace RawExecution.Drivers.ELF
                 FileTellFunc = fileTellFunc;
                 FileFlushFunc = fileFlushFunc;
 
-                CreateCanvasFunc = createCanvasFunc;
-                ClearCanvasFunc = clearCanvasFunc;
-                DrawPixelFunc = drawPixelFunc;
-                DisplayCanvasFunc = displayCanvasFunc;
+                GetArgsFunc = getArgsFunc;
             }
         }
 
@@ -146,7 +141,7 @@ namespace RawExecution.Drivers.ELF
             functionTable[0] = BuildFunctionTableForConsole();
             functionTable[1] = BuildFunctionTableForHeap();
             functionTable[2] = BuildFunctionTableForFile();
-            functionTable[3] = BuildFunctionTableForGraphics();
+            functionTable[3] = BuildFunctionTableForMisc();
 
             return functionTable;
         }
@@ -170,6 +165,7 @@ namespace RawExecution.Drivers.ELF
             delegate* unmanaged[Cdecl]<double, void> printNoLineDoubleFunc = &Console.WriteDouble;
             delegate* unmanaged[Cdecl]<void> clearFunc = &Console.Clear;
             delegate* unmanaged[Cdecl]<int, int, void> setCursorPositionFunc = &Console.SetCursorPosition;
+            //delegate* unmanaged[Cdecl]<int> getCharFunc = &Console.GetChar;
 
             void*[] callsConsole = {
                 printFunc,
@@ -188,7 +184,8 @@ namespace RawExecution.Drivers.ELF
                 printDoubleFunc,
                 printNoLineDoubleFunc,
                 clearFunc,
-                setCursorPositionFunc
+                setCursorPositionFunc,
+                //getCharFunc
             };
 
             // alloc memory and populate the function table
@@ -220,7 +217,6 @@ namespace RawExecution.Drivers.ELF
 
         private static void** BuildFunctionTableForFile()
         {
-            // define File functions in a modular way
             delegate* unmanaged[Cdecl]<char*, char*, C_FILE*> fileOpenFunc = &File.FileOpen;
             delegate* unmanaged[Cdecl]<C_FILE*, int> fileCloseFunc = &File.FileClose;
             delegate* unmanaged[Cdecl]<void*, uint, uint, C_FILE*, int> fileReadFunc = &File.FileRead;
@@ -231,6 +227,7 @@ namespace RawExecution.Drivers.ELF
 
 
             void*[] callsFile = { fileOpenFunc, fileCloseFunc, fileReadFunc, fileWriteFunc, fileSeekFunc, fileTellFunc, fileFlushFunc };
+
             // alloc memory and populate the function table
             void** fileTable = (void**)Cosmos.Core.Memory.Heap.Alloc((uint)(callsFile.Length * sizeof(void*)));
             for (int i = 0; i < callsFile.Length; i++)
@@ -240,20 +237,17 @@ namespace RawExecution.Drivers.ELF
             return fileTable;
         }
 
-        private static void** BuildFunctionTableForGraphics()
+        private static void** BuildFunctionTableForMisc()
         {
-            delegate* unmanaged[Cdecl]<uint, uint, void> createCanvasFunc = &Graphics.CreateCanvas;
-            delegate* unmanaged[Cdecl]<uint, void> clearCanvasFunc = &Graphics.ClearCanvas;
-            delegate* unmanaged[Cdecl]<uint, int, int, void> drawPixelFunc = &Graphics.DrawPixel;
-            delegate* unmanaged[Cdecl]<void> displayCanvasFunc = &Graphics.DisplayCanvas;
-            void*[] callsGraphics = { createCanvasFunc, clearCanvasFunc, drawPixelFunc, displayCanvasFunc };
+            delegate* unmanaged[Cdecl]<int*, char***, void> getArgsFunc = &Misc.GetArgs;
+            void*[] callsMisc = { getArgsFunc };
             // alloc memory and populate the function table
-            void** graphicsTable = (void**)Cosmos.Core.Memory.Heap.Alloc((uint)(callsGraphics.Length * sizeof(void*)));
-            for (int i = 0; i < callsGraphics.Length; i++)
+            void** miscTable = (void**)Cosmos.Core.Memory.Heap.Alloc((uint)(callsMisc.Length * sizeof(void*)));
+            for (int i = 0; i < callsMisc.Length; i++)
             {
-                graphicsTable[i] = callsGraphics[i];
+                miscTable[i] = callsMisc[i];
             }
-            return graphicsTable;
+            return miscTable;
         }
 
         public static class Console
@@ -365,6 +359,7 @@ namespace RawExecution.Drivers.ELF
             {
                 System.Console.SetCursorPosition(x, y);
             }
+
         }
 
 
@@ -583,32 +578,13 @@ namespace RawExecution.Drivers.ELF
             }
         }
 
-        public static class Graphics
+        public static class Misc
         {
-            static Canvas canvas;
             [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-            public static void CreateCanvas(uint Width, uint Height)
+            public static void GetArgs(int* argc, char*** argv)
             {
-                canvas = FullScreenCanvas.GetFullScreenCanvas(new Mode(Width, Height, ColorDepth.ColorDepth32));
-                canvas.Clear(0);
-            }
-
-            [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-            public static void ClearCanvas(uint color)
-            {
-                canvas.Clear((int)color);
-            }
-
-            [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-            public static void DisplayCanvas()
-            {
-                canvas.Display();
-            }
-
-            [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-            public static void DrawPixel(uint color, int x, int y)
-            {
-                canvas.DrawPoint((int)color, x, y);
+                *argc = ArgCount;
+                *argv = Args;
             }
         }
 
@@ -618,6 +594,40 @@ namespace RawExecution.Drivers.ELF
             {
 
             }
+        }
+    }
+
+    public static class ElfArgs
+    {
+        public static unsafe void SetArgs(string[] args)
+        {
+            if (args == null)
+            {
+                CosmosCallsImpl.Args = null;
+                CosmosCallsImpl.ArgCount = 0;
+                return;
+            }
+            byte** argPtrs = (byte**)Cosmos.Core.Memory.Heap.Alloc((uint)(args.Length * sizeof(byte*)));
+
+            for (int i = 0; i < args.Length; i++)
+            {
+                string arg = args[i];
+                int len = arg.Length;
+
+                // Allocate +1 for null terminator
+                byte* argPtr = (byte*)Cosmos.Core.Memory.Heap.Alloc((uint)(len + 1));
+
+                for (int j = 0; j < len; j++)
+                {
+                    argPtr[j] = (byte)(arg[j] & 0xFF); // Take only the low byte
+                }
+
+                argPtr[len] = 0; // Null terminator for C-style string
+                argPtrs[i] = argPtr;
+            }
+
+            CosmosCallsImpl.Args = (char**)argPtrs; // Cast if Args expects char**, though it's actually byte**
+            CosmosCallsImpl.ArgCount = args.Length;
         }
     }
 }

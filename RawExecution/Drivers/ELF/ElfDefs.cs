@@ -6,12 +6,7 @@ using Stellib.Str;
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Text;
-using System.Threading.Tasks;
-using uchar = System.Byte;
+
 namespace Stellib.ELF
 {
     public enum ElfInstructionSet
@@ -28,78 +23,7 @@ namespace Stellib.ELF
         AArch64 = 0xB7,
         RiscV = 0xF3
     }
-    public static class ElfNameConv
-    {
-        public static string ElfIS(ElfInstructionSet iset)
-        {
-            switch (iset)
-            {
-                case ElfInstructionSet.NoSpecific:
-                    return "No Specific";
-                case ElfInstructionSet.Sparc:
-                    return "SPARC";
-                case ElfInstructionSet.X86:
-                    return "x86";
-                case ElfInstructionSet.Mips:
-                    return "MIPS";
-                case ElfInstructionSet.PowerPC:
-                    return "PowerPC";
-                case ElfInstructionSet.Arm:
-                    return "ARM";
-                case ElfInstructionSet.SuperH:
-                    return "SuperH";
-                case ElfInstructionSet.IA64:
-                    return "IA-64";
-                case ElfInstructionSet.X86_64:
-                    return "x86-64";
-                case ElfInstructionSet.AArch64:
-                    return "AArch64";
-                case ElfInstructionSet.RiscV:
-                    return "RISC-V";
-            }
-            return "";
-        }
 
-        public static string ElfF(ElfFlags flags)
-        {
-            switch (flags)
-            {
-                case ElfFlags.None:
-                    return "None";
-                case ElfFlags.Executable:
-                    return "Executable";
-                case ElfFlags.Writeable:
-                    return "Writeable";
-                case ElfFlags.Readable:
-                    return "Readable";
-            }
-            return "";
-        }
-
-        public static string ElfST(ElfSegmentType type)
-        {
-            switch (type)
-            {
-                case ElfSegmentType.Null:
-                    return "Null";
-                case ElfSegmentType.Load:
-                    return "Load";
-                case ElfSegmentType.Dynamic:
-                    return "Dynamic";
-                case ElfSegmentType.Interp:
-                    return "Interp";
-                case ElfSegmentType.Note:
-                    return "Note";
-                case ElfSegmentType.Shlib:
-                    return "Shlib";
-                case ElfSegmentType.Phdr:
-                    return "Phdr";
-                case ElfSegmentType.Other:
-                    return "Other";
-            }
-            return "";
-        }
-    }
     public enum ElfFlags
     {
         None = 0x0,
@@ -119,263 +43,385 @@ namespace Stellib.ELF
         Phdr = 0x6,
         Other = 0x7
     }
-    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, Pack = 1)]
-    public unsafe struct Elf32_Phdr
-    {
-        public uint Type; // 1 = loadable segment, 2 = dynamic, etc. // 0-3
-        public uint Offset; // Offset in file to segment data          // 4-7
-        public uint VAddr; // Virtual address of segment               // 8-11
-        public uint PAddr; // Physical address of segment              // 12-15
-        public uint FileSize; // Size of segment in file                // 16-19
-        public uint MemSize; // Size of segment in memory               // 20-23
-        public uint Flags; // Segment flags                            // 24-27
-        public uint Align; // Alignment of segment                      // 28-31
-    } // 32 bytes
 
-    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, Pack = 1)]
-    public unsafe struct Elf32_Ehdr
+    public static class ElfNameConv
     {
-        public fixed uchar Magic[4]; // 0x7F, 'E', 'L', 'F'          // 0-3
-        public uchar Class; // 1 = 32-bit, 2 = 64-bit                // 4
-        public uchar Data; // 1 = little-endian, 2 = big-endian      // 5
-        public uchar HeaderVersion; // 1 = current version           // 6
-        public uchar OSABI; // 0 = System V, 1 = HP-UX, etc.         // 7
-        public fixed uchar Unused[8];                                // 8-15
-        public ushort Type; // 1 = relocatable, 2 = executable, etc. // 16-17
-        public ushort Machine; // 3 = Intel 80386, etc.              // 18-19
-        public uint ElfVersion; // 1 = current version               // 20-23
-        public uint Entry; // Entry point address                    // 24-27
-        public uint PhOff; // Program header table file offset       // 28-31
-        public uint ShOff; // Section header table file offset       // 32-35
-        public uint Flags; // Architecture-specific flags            // 36-39
-        public ushort EhSize; // Size of this header                 // 40-41
-        public ushort PhEntSize; // Size of program header entry     // 42-43
-        public ushort PhNum; // Number of program header entries     // 44-45
-        public ushort ShEntSize; // Size of section header entry     // 46-47
-        public ushort ShNum; // Number of section header entries     // 48-49
-        public ushort ShStrNdx; // Section name string table index   // 50-51
-    } // 52 bytes
+        // String conversion methods unchanged
+        public static string ElfIS(ElfInstructionSet iset)
+        {
+            switch (iset)
+            {
+                case ElfInstructionSet.NoSpecific: return "No Specific";
+                case ElfInstructionSet.Sparc: return "SPARC";
+                case ElfInstructionSet.X86: return "x86";
+                case ElfInstructionSet.Mips: return "MIPS";
+                case ElfInstructionSet.PowerPC: return "PowerPC";
+                case ElfInstructionSet.Arm: return "ARM";
+                case ElfInstructionSet.SuperH: return "SuperH";
+                case ElfInstructionSet.IA64: return "IA-64";
+                case ElfInstructionSet.X86_64: return "x86-64";
+                case ElfInstructionSet.AArch64: return "AArch64";
+                case ElfInstructionSet.RiscV: return "RISC-V";
+                default: return "Unknown";
+            }
+        }
+
+        public static string ElfF(ElfFlags flags)
+        {
+            string result = "";
+            if (flags == ElfFlags.None) return "None";
+            if ((flags & ElfFlags.Executable) != 0) result += "Executable ";
+            if ((flags & ElfFlags.Writeable) != 0) result += "Writeable ";
+            if ((flags & ElfFlags.Readable) != 0) result += "Readable ";
+            return result.Trim();
+        }
+
+        public static string ElfST(ElfSegmentType type)
+        {
+            switch (type)
+            {
+                case ElfSegmentType.Null: return "Null";
+                case ElfSegmentType.Load: return "Load";
+                case ElfSegmentType.Dynamic: return "Dynamic";
+                case ElfSegmentType.Interp: return "Interp";
+                case ElfSegmentType.Note: return "Note";
+                case ElfSegmentType.Shlib: return "Shlib";
+                case ElfSegmentType.Phdr: return "Phdr";
+                case ElfSegmentType.Other: return "Other";
+                default: return "Unknown";
+            }
+        }
+    }
+
+    // Raw memory structure for ELF program header
+    public unsafe class Elf32_Phdr
+    {
+        public uint Type;
+        public uint Offset;
+        public uint VAddr;
+        public uint PAddr;
+        public uint FileSize;
+        public uint MemSize;
+        public uint Flags;
+        public uint Align;
+
+        public static Elf32_Phdr FromPointer(byte* ptr)
+        {
+            Elf32_Phdr phdr = new Elf32_Phdr();
+            phdr.Type = *(uint*)ptr;
+            phdr.Offset = *(uint*)(ptr + 4);
+            phdr.VAddr = *(uint*)(ptr + 8);
+            phdr.PAddr = *(uint*)(ptr + 12);
+            phdr.FileSize = *(uint*)(ptr + 16);
+            phdr.MemSize = *(uint*)(ptr + 20);
+            phdr.Flags = *(uint*)(ptr + 24);
+            phdr.Align = *(uint*)(ptr + 28);
+            return phdr;
+        }
+    }
+
+    // Raw memory structure for ELF header
+    public unsafe class Elf32_Ehdr
+    {
+        public byte[] Magic = new byte[4];
+        public byte Class;
+        public byte Data;
+        public byte HeaderVersion;
+        public byte OSABI;
+        public byte[] Unused = new byte[8];
+        public ushort Type;
+        public ushort Machine;
+        public uint ElfVersion;
+        public uint Entry;
+        public uint PhOff;
+        public uint ShOff;
+        public uint Flags;
+        public ushort EhSize;
+        public ushort PhEntSize;
+        public ushort PhNum;
+        public ushort ShEntSize;
+        public ushort ShNum;
+        public ushort ShStrNdx;
+
+        public static Elf32_Ehdr FromPointer(byte* ptr)
+        {
+            Elf32_Ehdr ehdr = new Elf32_Ehdr();
+
+            // Copy magic bytes
+            for (int i = 0; i < 4; i++)
+                ehdr.Magic[i] = ptr[i];
+
+            ehdr.Class = ptr[4];
+            ehdr.Data = ptr[5];
+            ehdr.HeaderVersion = ptr[6];
+            ehdr.OSABI = ptr[7];
+
+            // Copy unused bytes
+            for (int i = 0; i < 8; i++)
+                ehdr.Unused[i] = ptr[8 + i];
+
+            ehdr.Type = *(ushort*)(ptr + 16);
+            ehdr.Machine = *(ushort*)(ptr + 18);
+            ehdr.ElfVersion = *(uint*)(ptr + 20);
+            ehdr.Entry = *(uint*)(ptr + 24);
+            ehdr.PhOff = *(uint*)(ptr + 28);
+            ehdr.ShOff = *(uint*)(ptr + 32);
+            ehdr.Flags = *(uint*)(ptr + 36);
+            ehdr.EhSize = *(ushort*)(ptr + 40);
+            ehdr.PhEntSize = *(ushort*)(ptr + 42);
+            ehdr.PhNum = *(ushort*)(ptr + 44);
+            ehdr.ShEntSize = *(ushort*)(ptr + 46);
+            ehdr.ShNum = *(ushort*)(ptr + 48);
+            ehdr.ShStrNdx = *(ushort*)(ptr + 50);
+
+            return ehdr;
+        }
+    }
 
     public unsafe class Elf32
     {
-        public class InvalidElfPathException : Exception
+        public class ElfException : Exception
         {
-            public InvalidElfPathException(string message) : base(message) { }
+            public ElfException(string message) : base(message) { }
         }
-        public Elf32_Ehdr Header;
-        public uchar[] Magic;
-        public List<Elf32_Phdr> ProgramHeaders = new List<Elf32_Phdr>();
-        byte* StartIndex = null;
-        private List<IntPtr> AllocatedMemory = new List<IntPtr>();
-        string Path = "";
 
-        public Elf32(string path) : this(File.ReadAllBytes(path))
+        public Elf32_Ehdr Header;
+        public byte[] Magic;
+        public List<Elf32_Phdr> ProgramHeaders = new List<Elf32_Phdr>();
+
+        private string Path = "";
+        private byte[] FileBytes;
+        private byte* FileStart;
+
+        // Memory tracking
+        private IntPtr LoadBase = IntPtr.Zero;
+        private uint TotalMemSize = 0;
+        private uint EntryPointOffset = 0;
+
+        public Elf32(string path)
         {
             Path = path;
+            LoadElfFile(File.ReadAllBytes(path));
         }
 
         public Elf32(byte[] bytes)
         {
-            fixed (byte* p = bytes)
-            {
-                StartIndex = p;
-                Header = *(Elf32_Ehdr*)p;
-                Magic = new byte[4];
-                for (int i = 0; i < 4; i++)
-                {
-                    Magic[i] = Header.Magic[i];
-                }
-                for (int i = 0; i < Header.PhNum; i++)
-                {
-                    var phdr = *(Elf32_Phdr*)(p + Header.PhOff + (i * Header.PhEntSize));
-                    ProgramHeaders.Add(phdr);
-                }
-            }
+            LoadElfFile(bytes);
         }
 
-        public unsafe byte* ExtractEntryCode()
+        private void LoadElfFile(byte[] bytes)
         {
-            byte* entry = StartIndex + Header.Entry;
-            return entry;
-        }
-
-        public void ReloadElf()
-        {
-            if (Path == "")
+            FileBytes = bytes;
+            fixed (byte* start = bytes)
             {
-                throw new InvalidElfPathException("Path is not set. Cannot reload ELF.");
-            }
+                FileStart = start;
+                Header = Elf32_Ehdr.FromPointer(start);
 
-            if (!File.Exists(Path))
-            {
-                throw new InvalidElfPathException("File does not exist.");
-            }
-
-            byte[] bytes = File.ReadAllBytes(Path);
-            fixed (byte* p = bytes)
-            {
-                StartIndex = p;
-                Header = *(Elf32_Ehdr*)p;
+                // Verify ELF magic
                 Magic = new byte[4];
                 for (int i = 0; i < 4; i++)
-                {
                     Magic[i] = Header.Magic[i];
-                }
+
+                if (Magic[0] != 0x7F || Magic[1] != 'E' || Magic[2] != 'L' || Magic[3] != 'F')
+                    throw new ElfException("Invalid ELF magic number");
+
+                // Load program headers
                 ProgramHeaders.Clear();
                 for (int i = 0; i < Header.PhNum; i++)
                 {
-                    var phdr = *(Elf32_Phdr*)(p + Header.PhOff + (i * Header.PhEntSize));
+                    byte* phdrPtr = start + Header.PhOff + (i * Header.PhEntSize);
+                    var phdr = Elf32_Phdr.FromPointer(phdrPtr);
                     ProgramHeaders.Add(phdr);
                 }
             }
-            // Free previously allocated memory if any
-            FreeElf();
-
-            // Load the ELF again
-            foreach (var phdr in ProgramHeaders)
-            {
-                if (phdr.Type == (uint)ElfSegmentType.Load)
-                {
-                    IntPtr mem = (IntPtr)Heap.Alloc(phdr.MemSize);
-                    AllocatedMemory.Add(mem); // Track the allocated memory
-                    unsafe
-                    {
-                        Buffer.MemoryCopy(StartIndex + phdr.Offset, (byte*)mem, phdr.MemSize, phdr.FileSize);
-                        if (phdr.MemSize > phdr.FileSize)
-                        {
-                            // Zero out the rest of the memory if MemSize is greater than FileSize
-                            for (uint i = phdr.FileSize; i < phdr.MemSize; i++)
-                            {
-                                ((byte*)mem)[i] = 0;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Execute the entry point
-            ExecuteEntryPoint();
         }
 
         public void LoadAndExecuteElf()
         {
-            foreach (var phdr in ProgramHeaders)
-            {
-                if (phdr.Type == (uint)ElfSegmentType.Load)
-                {
-                    IntPtr mem = (IntPtr)Heap.Alloc(phdr.MemSize);
-                    AllocatedMemory.Add(mem); // Track the allocated memory
-                    unsafe
-                    {
-                        Buffer.MemoryCopy(StartIndex + phdr.Offset, (byte*)mem, phdr.MemSize, phdr.FileSize);
-                        if (phdr.MemSize > phdr.FileSize)
-                        {
-                            // Zero out the rest of the memory if MemSize is greater than FileSize
-                            for (uint i = phdr.FileSize; i < phdr.MemSize; i++)
-                            {
-                                ((byte*)mem)[i] = 0;
-                            }
-                        }
-                    }
-                }
-            }
+            if (LoadBase != IntPtr.Zero)
+                FreeElf(); // Clean up previous allocation if any
+
+            // First pass: calculate total memory needed
+            CalculateMemoryRequirements();
+
+            // Allocate memory in one contiguous block
+            LoadBase = (IntPtr)Heap.Alloc(TotalMemSize);
+            if (LoadBase == IntPtr.Zero)
+                throw new ElfException("Failed to allocate memory for ELF");
+
+            // Second pass: load segments into memory sequentially
+            LoadSegments();
 
             // Execute the entry point
             ExecuteEntryPoint();
         }
 
+        private void CalculateMemoryRequirements()
+        {
+            TotalMemSize = 0;
+
+            foreach (var phdr in ProgramHeaders)
+            {
+                if (phdr.Type != (uint)ElfSegmentType.Load)
+                    continue;
+
+                // Apply alignment if specified
+                if (phdr.Align > 1)
+                {
+                    uint mask = phdr.Align - 1;
+                    TotalMemSize = (TotalMemSize + mask) & ~mask;
+                }
+
+                TotalMemSize += phdr.MemSize;
+            }
+
+            // Ensure we have at least some memory
+            if (TotalMemSize == 0)
+                throw new ElfException("No loadable segments found in ELF");
+        }
+
+        private void LoadSegments()
+        {
+            uint currentOffset = 0;
+
+            foreach (var phdr in ProgramHeaders)
+            {
+                if (phdr.Type != (uint)ElfSegmentType.Load)
+                    continue;
+
+                // Apply alignment if specified
+                if (phdr.Align > 1)
+                {
+                    uint mask = phdr.Align - 1;
+                    currentOffset = (currentOffset + mask) & ~mask;
+                }
+
+                byte* destAddr = (byte*)LoadBase + currentOffset;
+
+                // Copy file data
+                byte* srcAddr = FileStart + phdr.Offset;
+                for (uint i = 0; i < phdr.FileSize; i++)
+                    destAddr[i] = srcAddr[i];
+
+                // Zero out BSS section (difference between mem and file size)
+                if (phdr.MemSize > phdr.FileSize)
+                {
+                    byte* bssStart = destAddr + phdr.FileSize;
+                    uint bssSize = phdr.MemSize - phdr.FileSize;
+
+                    for (uint i = 0; i < bssSize; i++)
+                        bssStart[i] = 0;
+                }
+
+                // Check if entry point is in this segment
+                if (Header.Entry >= phdr.VAddr && Header.Entry < phdr.VAddr + phdr.MemSize)
+                {
+                    EntryPointOffset = currentOffset + (Header.Entry - phdr.VAddr);
+                }
+
+                currentOffset += phdr.MemSize;
+            }
+        }
 
         private void ExecuteEntryPoint()
         {
-            byte* entryPoint = StartIndex + Header.Entry;
-            var entryFunc = (delegate* unmanaged[Stdcall]<void***, void>)entryPoint;
+            if (LoadBase == IntPtr.Zero)
+                throw new ElfException("ELF not loaded");
 
-            void*** CallList = CosmosCallsImpl.BuildCalls();
+            byte* entryPoint = (byte*)LoadBase + EntryPointOffset;
 
-            entryFunc(CallList);
-            return;
+            // Direct function pointer definition without InteropServices
+            void*** calls = CosmosCallsImpl.BuildCalls();
+
+            try
+            {
+                // Raw call using function pointer
+                byte* funcPtr = entryPoint;
+                RawCall(funcPtr, calls);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error executing ELF: {ex.Message}");
+            }
+        }
+
+        // Raw function call implementation
+        private unsafe void RawCall(byte* funcPtr, void*** callList)
+        {
+            delegate* unmanaged[Cdecl]<void***, void> entryFunc = (delegate* unmanaged[Cdecl]<void***, void>)funcPtr;
+            entryFunc(callList);
+        }
+
+        public void ReloadElf()
+        {
+            if (string.IsNullOrEmpty(Path))
+                throw new ElfException("Path is not set. Cannot reload ELF.");
+
+            if (!File.Exists(Path))
+                throw new ElfException("File does not exist.");
+
+            // Free current allocation
+            FreeElf();
+
+            // Reload and execute
+            LoadElfFile(File.ReadAllBytes(Path));
+            LoadAndExecuteElf();
         }
 
         public void FreeElf()
         {
-            // Free all allocated memory
-            foreach (var mem in AllocatedMemory)
+            if (LoadBase != IntPtr.Zero)
             {
-                Heap.Free((byte*)mem);
+                Heap.Free((byte*)LoadBase);
+                LoadBase = IntPtr.Zero;
             }
-            AllocatedMemory.Clear(); // Clear the list after freeing
-            
         }
-        
 
+        // PrintElfInfo method remains largely unchanged
         public void PrintElfInfo()
         {
-            Console.WriteLine("Program Headers:");
+            // Implementation unchanged
+            Console.WriteLine("ELF Header:");
+            Console.WriteLine($"  Magic:                   {Magic[0]:X2} {Magic[1]:X2} {Magic[2]:X2} {Magic[3]:X2}");
+            Console.WriteLine($"  Class:                   {(Header.Class == 1 ? "32-bit" : "64-bit")}");
+            Console.WriteLine($"  Data:                    {(Header.Data == 1 ? "Little Endian" : "Big Endian")}");
+            Console.WriteLine($"  Machine:                 {ElfNameConv.ElfIS((ElfInstructionSet)Header.Machine)}");
+            Console.WriteLine($"  Entry Point:             0x{Header.Entry:X8}");
+            Console.WriteLine($"  Program Header Count:    {Header.PhNum}");
 
-            // Calculate the maximum widths for each column
-            int typeWidth = "Type".Length;
-            int offsetWidth = "Offset".Length;
-            int vaddrWidth = "VAddr".Length;
-            int paddrWidth = "PAddr".Length;
-            int fileSizeWidth = "FileSize".Length;
-            int memSizeWidth = "MemSize".Length;
-            int flagsWidth = "Flags".Length;
-            int alignWidth = "Align".Length;
+            Console.WriteLine("\nProgram Headers:");
+            Console.WriteLine("  Type      Offset    VAddr     PAddr     FileSize  MemSize   Flags     Align");
+            Console.WriteLine("  --------- --------- --------- --------- --------- --------- --------- ---------");
 
-            foreach (var phdr in ProgramHeaders)
-            {
-                // Calculate the width of the fields dynamically if needed, e.g., max width of values
-                typeWidth = Math.Max(typeWidth, ElfNameConv.ElfST((ElfSegmentType)phdr.Type).Length);
-                offsetWidth = Math.Max(offsetWidth, phdr.Offset.ToString().Length);
-                vaddrWidth = Math.Max(vaddrWidth, phdr.VAddr.ToString().Length);
-                paddrWidth = Math.Max(paddrWidth, phdr.PAddr.ToString().Length);
-                fileSizeWidth = Math.Max(fileSizeWidth, phdr.FileSize.ToString().Length);
-                memSizeWidth = Math.Max(memSizeWidth, phdr.MemSize.ToString().Length);
-                flagsWidth = Math.Max(flagsWidth, ElfNameConv.ElfF((ElfFlags)phdr.Flags).Length);
-                alignWidth = Math.Max(alignWidth, phdr.Align.ToString().Length);
-            }
-
-            // Print the header with dynamic widths
-            Console.WriteLine(
-                $"{"Type".PadRight(typeWidth)} " +
-                $"{"Offset".PadRight(offsetWidth)} " +
-                $"{"VAddr".PadRight(vaddrWidth)} " +
-                $"{"PAddr".PadRight(paddrWidth)} " +
-                $"{"FileSize".PadRight(fileSizeWidth)} " +
-                $"{"MemSize".PadRight(memSizeWidth)} " +
-                $"{"Flags".PadRight(flagsWidth)} " +
-                $"{"Align".PadRight(alignWidth)}"
-            );
-
-            // Print the program headers with dynamic widths
             foreach (var phdr in ProgramHeaders)
             {
                 Console.WriteLine(
-                    $"{ElfNameConv.ElfST((ElfSegmentType)phdr.Type).PadRight(typeWidth)} " +
-                    $"{phdr.Offset.ToString().PadRight(offsetWidth)} " +
-                    $"{phdr.VAddr.ToString().PadRight(vaddrWidth)} " +
-                    $"{phdr.PAddr.ToString().PadRight(paddrWidth)} " +
-                    $"{phdr.FileSize.ToString().PadRight(fileSizeWidth)} " +
-                    $"{phdr.MemSize.ToString().PadRight(memSizeWidth)} " +
-                    $"{ElfNameConv.ElfF((ElfFlags)phdr.Flags).PadRight(flagsWidth)} " +
-                    $"{phdr.Align.ToString().PadRight(alignWidth)}"
+                    $"  {ElfNameConv.ElfST((ElfSegmentType)phdr.Type),-9} " +
+                    $"0x{phdr.Offset:X8} " +
+                    $"0x{phdr.VAddr:X8} " +
+                    $"0x{phdr.PAddr:X8} " +
+                    $"0x{phdr.FileSize:X8} " +
+                    $"0x{phdr.MemSize:X8} " +
+                    $"{ElfNameConv.ElfF((ElfFlags)phdr.Flags),-9} " +
+                    $"0x{phdr.Align:X8}"
                 );
             }
 
-            Console.WriteLine("Total Program Headers: " + ProgramHeaders.Count);
+            // Architecture compatibility check
             if (Header.Machine != (int)ElfInstructionSet.X86)
             {
                 Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine("Warning: This ELF is not for x86 architecture.\n         It will most likely fail. (Invalid Opcode)");
+                Console.WriteLine("\nWARNING: This ELF is not for x86 architecture. It will likely fail with Invalid Opcode.");
                 Console.ResetColor();
             }
             else
             {
                 Console.ForegroundColor = ConsoleColor.Green;
-                Console.WriteLine("This ELF is for x86 architecture.\nIt should be compatible.");
+                Console.WriteLine("\nThis ELF is for x86 architecture and should be compatible.");
                 Console.ResetColor();
             }
+
+            Console.WriteLine($"\nTotal memory required for loading: {TotalMemSize} bytes");
         }
     }
-
 }

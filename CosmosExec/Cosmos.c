@@ -1,7 +1,5 @@
 #include "Cosmos.h"
 
-#define FUNC_ __attribute__((used)) __cdecl
-
 /// ############################# READ THIS FUCKING NOTE ############################ ///
 /// Before you add your own function, for the love of god please know that            ///
 /// C# uses UTF-16 encoding for strings. This means that if you pass a string         ///
@@ -328,31 +326,19 @@ FUNC_ int File_Flush(FILE* stream)
     return flush(stream);
 }
 
-// CLASS 3 (Graphics)
+// CLASS 3 (MISC)
 
-// // INDEX 0
-// FUNC_ void Graphics_CreateCanvas(unsigned int width, unsigned int height) 
-// {
-//     void (*createCanvas)(unsigned int, unsigned int) = (void (*)(unsigned int, unsigned int)) funcTable[3][0];
+FUNC_ void Cosmos_Get_Program_Arguments(int* argc, char*** argv)
+{
+    void (*getArgs)(char***, int*) = (void (*)(char***, int*)) funcTable[3][0];
 
-//     createCanvas(height, width);
-// }
-
-// // INDEX 1
-// FUNC_ void Graphics_ClearCanvas(unsigned int color) 
-// {
-//     void (*clearCanvas)(unsigned int) = (void (*)(unsigned int)) funcTable[3][1];
-
-//     clearCanvas(color);
-// }
-
-// // INDEX 2
-// FUNC_ void Graphics_DrawPixel(unsigned int color, int x, int y) 
-// {
-//     void (*drawPixel)(int, int, unsigned int) = (void (*)(int, int, unsigned int)) funcTable[3][2];
-
-//     drawPixel(y, x, color);
-// }
+    if (getArgs) {
+        getArgs(argv, argc);
+    } else {
+        *argc = 0;
+        *argv = NULL;
+    }
+}
 
 /// NO CLASS FUNCS
 

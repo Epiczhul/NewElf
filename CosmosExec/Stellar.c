@@ -11,26 +11,33 @@ int strlen(char* str) {
     return i;
 }
 
-int strcmp(const char* str1, const char* str2) {
-    while (*str1 && (*str1 == *str2)) {
+int strnlen(char* str, unsigned int n) {
+    int i = 0;
+    while (i < n && str[i] != 0) {
+        i++;
+    }
+    return i;
+}
+
+int strcmp(const char* str1, const char* str2)
+{
+    while (*str1 && (*str1 == *str2))
+    {
         str1++;
         str2++;
     }
-    return *(unsigned char*)str1 - *(unsigned char*)str2;
+
+    return (unsigned char)(*str1) - (unsigned char)(*str2);
 }
 
+
 char* strncpy(char* dest, const char* src, unsigned int n) {
-    char* d = dest;
-    const char* s = src;
-    while (n && *s) {
-        *d++ = *s++;
-        n--;
+    size_t size = strnlen((char*)src, n);
+    if (size != n)
+    {
+        memset(dest + size, '\0', n - size); // Fill the rest with null bytes
     }
-    while (n) {
-        *d++ = 0;
-        n--;
-    }
-    return dest;
+    return memcpy(dest, src, size);
 }
 
 int strcspn(const char* str1, const char* str2) {
@@ -103,6 +110,137 @@ float strtof(const char* str, char** endptr) {
     return result * sign;
 }
 
+int strncmp(const char *str1, const char *str2, unsigned int n)
+{
+    while (n && *str1 && (*str1 == *str2)) {
+        str1++;
+        str2++;
+        n--;
+    }
+    if (n == 0) {
+        return 0; // Strings are equal up to n characters
+    }
+    return *(unsigned char*)str1 - *(unsigned char*)str2; // Return difference of first non-matching character
+}
+
+int fputc(int c, FILE *stream)
+{
+    // return EOF if end of file by checking _ptr
+    if (stream->_ptr >= stream->_base + stream->_cnt) {
+        return EOF;
+    }
+    File_Write(&c, 1, 1, stream); // Write the character to the file
+    return c;
+}
+
+char *strcpy(char *dest, const char *src)
+{
+    char *original = dest;
+    while ((*dest++ = *src++));
+    return original;
+}
+
+
+long long strtoll(const char* str, char** endptr, int base) {
+    unsigned long long result = 0;
+    int i = 0;
+
+    // Skip whitespace
+    while (str[i] == ' ' || str[i] == '\t' || str[i] == '\n' || str[i] == '\r') {
+        i++;
+    }
+
+    // Check for hex prefix (0x or 0X)
+    if (str[i] == '0' && (str[i + 1] == 'x' || str[i + 1] == 'X') && (base == 0 || base == 16)) {
+        i += 2;  // Skip the "0x" or "0X"
+        base = 16;
+    } else if (base == 0) {
+        // If no base is specified, default to 10
+        base = 10;
+    }
+
+    // Convert the string to a number
+    while (str[i] != '\0') {
+        int digit;
+        
+        if (str[i] >= '0' && str[i] <= '9') {
+            digit = str[i] - '0';
+        } else if (str[i] >= 'a' && str[i] <= 'f') {
+            digit = str[i] - 'a' + 10;
+        } else if (str[i] >= 'A' && str[i] <= 'F') {
+            digit = str[i] - 'A' + 10;
+        } else {
+            // Not a valid digit
+            break;
+        }
+        
+        // Check if the digit is valid for the specified base
+        if (digit >= base) {
+            break;
+        }
+        
+        // Update result
+        result = result * base + digit;
+        i++;
+    }
+
+    // Set endptr to the first character not used in the conversion
+    if (endptr != NULL) {
+        *endptr = (char*)(str + i);
+    }
+
+    return result;
+}
+
+int strncasecmp(const char *str1, const char *str2, unsigned int n)
+{
+    while (n && *str1 && *str2) {
+        char c1 = tolower((unsigned char)*str1);
+        char c2 = tolower((unsigned char)*str2);
+        if (c1 != c2) {
+            return c1 - c2; // Return difference of first non-matching character
+        }
+        str1++;
+        str2++;
+        n--;
+    }
+    if (n == 0) {
+        return 0; // Strings are equal up to n characters
+    }
+    return tolower((unsigned char)*str1) - tolower((unsigned char)*str2); // Return difference of first non-matching character
+}
+
+double atof(const char *str)
+{
+    double result = 0.0;
+    int sign = 1;
+    if (*str == '-') {
+        sign = -1;
+        str++;
+    } else if (*str == '+') {
+        str++;
+    }
+    while (*str >= '0' && *str <= '9') {
+        result = result * 10.0 + (*str - '0');
+        str++;
+    }
+    if (*str == '.') {
+        str++;
+        double decimal_place = 0.1;
+        while (*str >= '0' && *str <= '9') {
+            result += decimal_place * (*str - '0');
+            decimal_place *= 0.1;
+            str++;
+        }
+    }
+    return result * sign;
+}
+
+int isprint(char c)
+{
+    return (c >= 32 && c <= 126); // Check if character is printable (ASCII range)
+}
+
 unsigned int strtoul(const char* str, char** endptr, int base) {
     unsigned int result = 0;
     while (*str) {
@@ -120,6 +258,62 @@ unsigned int strtoul(const char* str, char** endptr, int base) {
         *endptr = (char*)str;
     }
     return result;
+}
+
+char *strchr(const char *str, int c)
+{
+    while (*str) {
+        if (*str == (char)c) {
+            return (char *)str; // Return pointer to the first occurrence
+        }
+        str++;
+    }
+    return NULL; // Return NULL if not found
+}
+
+char* strrchr(const char* str, int c)
+{
+    const char* last_occurrence = NULL;
+    while (*str) {
+        if (*str == (char)c) {
+            last_occurrence = str; // Update last occurrence
+        }
+        str++;
+    }
+    return (char*)last_occurrence; // Return pointer to the last occurrence or NULL
+}
+
+char *strdup(const char *str)
+{
+    int len = strlen(str);
+    char *copy = (char *)Heap_Alloc(len + 1);
+    if (copy) {
+        memcpy(copy, str, len);
+        copy[len] = '\0'; // Null-terminate the string
+    }
+    return copy;
+}
+
+char *strstr(const char *str1, const char *str2)
+{
+    if (!*str2) {
+        return (char *)str1; // If str2 is empty, return str1
+    }
+    const char *p1 = str1;
+    const char *p2 = str2;
+    while (*p1) {
+        const char *start = p1;
+        while (*p1 && *p2 && (*p1 == *p2)) {
+            p1++;
+            p2++;
+        }
+        if (!*p2) {
+            return (char *)start; // Found the substring
+        }
+        p2 = str2; // Reset p2 to the start of str2
+        p1 = start + 1; // Move to the next character in str1
+    }
+    return NULL; // Not found
 }
 
 int tolower(int c) {
@@ -433,7 +627,7 @@ void uitoa(unsigned int num, char* str, int base) {
     str[i] = '\0'; // Null-terminate the string
 }
 
-void atoi(int num, char* str, int base) {
+void atoi_v(int num, char* str, int base) {
     int i = 0;
     do {
         int rem = num % base;
@@ -441,6 +635,30 @@ void atoi(int num, char* str, int base) {
         num /= base;
     } while (num != 0);
     str[i] = '\0'; // Null-terminate the string
+}
+
+int atoi(const char* str, char* endptr, int base) {
+    
+}
+
+int atoi_s(char* s)
+{
+    int result = 0;
+    int sign = 1;
+    if (*s == '-') {
+        sign = -1; // Handle negative numbers
+        s++;
+    } else if (*s == '+') {
+        s++;
+    }
+    while (*s) {
+        if (*s < '0' || *s > '9') {
+            break; // Invalid character
+        }
+        result = result * 10 + (*s - '0'); // Convert character to digit
+        s++;
+    }
+    return result * sign; // Return the result with the correct sign
 }
 
 void printf(const char* format, ...) {
@@ -688,6 +906,14 @@ void vsprintf(char* str, const char* format, va_list ap) {
     str = p; // Update the pointer to the end of the formatted string
 }
 
+void vfprintf(FILE *stream, const char *format, va_list ap)
+{
+    char buffer[256]; // Buffer for formatted string
+    vsnprintf(buffer, sizeof(buffer), format, ap); // Format the string
+    Console_WriteA(buffer); // Print the formatted string to the console
+    // Note: In a real implementation, you would write to the stream instead of Console_WriteA
+}
+
 void clrscr(void) {
     Console_Clear(); // Clear the console screen
 }
@@ -843,6 +1069,14 @@ int sscanf(const char *str, const char *fmt, ...) {
     return ret; // Return the number of items successfully read
 }
 
+void puts(const char* str) {
+    printf(str); // Print the string to the console
+}
+
+void putchar(char c) {
+    printf("%c", c); // Print the character to the console
+}
+
 FILE* fopen(const char* filename, const char* mode) {
     return File_Open((char*)filename, (char*)mode);
 }
@@ -868,5 +1102,97 @@ int ftell(FILE* stream) {
 }
 
 int fflush(FILE* stream) {
+    if (stream == stdout)
+    {
+        return 0;
+    }
     return File_Flush(stream);
 }
+
+int fprintf(FILE* stream, const char* format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    char buffer[256]; // Buffer for formatted string
+    vsnprintf(buffer, sizeof(buffer), format, args); // Format the string
+    if (stream == stderr)
+    {
+        printf("%s", buffer); // Print to standard error
+        return strlen(buffer); // Return the number of characters written
+    }
+    int result = File_Write(buffer, 1, strlen(buffer), stream); // Write to the file stream
+    va_end(args);
+    return result; // Return the number of characters written
+}
+
+int fscanf(FILE* stream, const char* format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    char buffer[256]; // Buffer for formatted string
+    int count = File_Read(buffer, 1, sizeof(buffer) - 1, stream); // Read from the file stream
+    buffer[count] = '\0'; // Null-terminate the string
+
+    int result = sscanf(buffer, format, args); // Parse the formatted string
+    va_end(args);
+    return result; // Return the number of items successfully read
+}
+
+int remove(const char* filename)
+{
+    // Implement file removal logic here
+    // For now, just return 0 to indicate success
+    return 0; // Return 0 for success, or -1 for failure
+}
+
+int rename(const char* oldname, const char* newname)
+{
+    // Implement file renaming logic here
+    // For now, just return 0 to indicate success
+    return 0; // Return 0 for success, or -1 for failure
+}
+
+
+
+int abs(int x) {
+    return (x < 0) ? -x : x; // Return the absolute value of x
+}
+
+double fabs(double x) {
+    return (x < 0.0) ? -x : x; // Return the absolute value of x as a double
+}
+
+int feof(FILE *stream)
+{
+    if (stream == NULL) {
+        return 1; // If stream is NULL, consider it as end of file
+    }
+    // Check if the end of file has been reached
+    return (stream->_flag & FILE_FLAG_EOF) ? 1 : 0; // Return 1 if EOF, otherwise 0
+}
+
+void exit(int status)
+{
+    printf("Exiting with status %d\n", status); // Print exit status
+    while (1) {
+    }
+}
+
+long long __divdi3(long long a, long long b) {
+    if (b == 0) {
+        // Handle division by zero
+        return 0; // or raise an error
+    }
+    return a / b; // Perform integer division
+}
+
+int strcasecmp(const char *s1, const char *s2)
+{
+    while (*s1 && *s2 && tolower((unsigned char)*s1) == tolower((unsigned char)*s2))
+    {
+        s1++;
+        s2++;
+    }
+    return tolower((unsigned char)*s1) - tolower((unsigned char)*s2);
+}
+

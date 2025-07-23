@@ -1,7 +1,13 @@
 #pragma once
 
 #include <stdarg.h>
+#include <stddef.h>
+#include <stdint.h>
 
+#define stdin ((FILE*)0)
+#define stdout ((FILE*)1)
+#define stderr ((FILE*)2)
+#define EOF (-1)
 
 typedef unsigned int size_t;
 
@@ -12,7 +18,10 @@ typedef unsigned int size_t;
 #define NO_NAME_MANGLE
 #endif
 
-#define NULL 0
+#define INT_MIN (-2147483647 - 1)
+#define INT_MAX 2147483647
+#define LLONG_MAX 9223372036854775807LL
+#define LLONG_MIN (-9223372036854775807LL - 1)
 
 
 #define __stdcall __attribute__((__stdcall__))
@@ -57,7 +66,16 @@ char* strncpy(char* dest, const char* src, unsigned int n);
 int strcspn(const char* str1, const char* str2);
 int strtol(const char* str, char** endptr, int base);
 unsigned int strtoul(const char* str, char** endptr, int base);
+char* strrchr(const char* str, int c);
+char* strchr(const char* str, int c);
+char* strdup(const char* str);
+char* strstr(const char* str1, const char* str2);
 float strtof(const char* str, char** endptr);
+int strncmp(const char* str1, const char* str2, unsigned int n);
+int strncasecmp(const char* str1, const char* str2, unsigned int n);
+int strcasecmp(const char* str1, const char* str2);
+double atof(const char* str);
+int isprint(char c);
 int tolower(int c);
 int toupper(int c);
 int isdigit(int c);
@@ -192,14 +210,19 @@ void ltoa(long num, char* str, int base);
 void utoa(unsigned int num, char* str, int base);
 void ultoa(unsigned long num, char* str, int base);
 void uitoa(unsigned int num, char* str, int base);
-void atoi(int num, char* str, int base);
+void atoi_v(int num, char* str, int base);
+int atoi(const char* str, char* endptr, int base);
+int atoi_s(char* s);
 
 void printf(const char* format, ...);
 int sprintf(char* str, const char* format, ...);
 int snprintf(char* str, size_t size, const char* format, ...);
 void vsnprintf(char *str, size_t size, const char *format, va_list args);
 void vsprintf(char* str, const char* format, va_list ap);
+void vfprintf(FILE* stream, const char* format, va_list ap);
 void clrscr(void);
+void puts(const char* str);
+void putchar(char c);
 
 void gets(char* str, size_t size);
 
@@ -212,6 +235,10 @@ int sscanf(const char* str, const char* format, ...);
 #define SEEK_CUR 1
 #define SEEK_END 2
 
+#define FILE_FLAG_EOF 0x01
+
+#define EISDIR 21
+
 //file functions
 FILE* fopen(const char* filename, const char* mode);
 int fclose(FILE* file);
@@ -220,6 +247,23 @@ int fwrite(void* buffer, unsigned int size, unsigned int nmemb, FILE* stream);
 int fseek(FILE* stream, int offset, int whence);
 int ftell(FILE* stream);
 int fflush(FILE* stream);
+int fprintf(FILE* stream, const char* format, ...);
+int fscanf(FILE* stream, const char* format, ...);
+int remove(const char* filename);
+int rename(const char* oldname, const char* newname);
 
+int abs(int x);
+double fabs(double x);
+
+int feof(FILE* stream);
+
+
+void exit(int status);
+
+int strncmp(const char* s1, const char* s2, unsigned int n);
+int fputc(int c, FILE* stream);
+int fprintf(FILE* stream, const char* format, ...);
+char* strcpy(char* dest, const char* src);
+long long strtoll(const char *nptr, char **endptr, int base);
 
 #pragma endregion FUNCTION DECLARATIONS
