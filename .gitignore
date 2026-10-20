@@ -398,3 +398,8 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+# Cosmos build outputs
+output-x64/
+output-arm64/
+*.iso
