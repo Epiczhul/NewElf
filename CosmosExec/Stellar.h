@@ -9,8 +9,6 @@
 #define stderr ((FILE*)2)
 #define EOF (-1)
 
-typedef unsigned int size_t;
-
 /// @brief Prevents name mangling for C++ compilers
 #ifdef __cplusplus
 #define NO_NAME_MANGLE extern "C"
@@ -24,22 +22,27 @@ typedef unsigned int size_t;
 #define LLONG_MIN (-9223372036854775807LL - 1)
 
 
-#define __stdcall __attribute__((__stdcall__))
-#define __cdecl __attribute__((__cdecl__))
-#define __fastcall __attribute__((__fastcall__))
+/// There is a single calling convention in 64-bit mode, so these MS-style
+/// keywords expand to nothing instead of emitting 'attribute ignored' warnings.
+#define __stdcall
+#define __cdecl
+#define __fastcall
 #define __packed __attribute__((__packed__))
 
+/// 64-bit interrupt gate descriptor (16 bytes, the x86-64 IDT format).
 typedef struct idt_entry_struct {
-    unsigned short base_low;  // lower 16 bits of the base address
-    unsigned short selector;   // selector in GDT or LDT
-    unsigned char zero;        // unused, set to 0
-    unsigned char flags;       // type and attributes
-    unsigned short base_high;  // upper 16 bits of the base address
+    unsigned short base_low;   // bits 0..15 of the handler address
+    unsigned short selector;   // code segment selector (GDT/LDT)
+    unsigned char ist;         // Interrupt Stack Table offset (bits 0..2), else 0
+    unsigned char flags;       // type and attributes (0x8E = present 64-bit interrupt gate)
+    unsigned short base_mid;   // bits 16..31 of the handler address
+    unsigned int base_high;    // bits 32..63 of the handler address
+    unsigned int reserved;     // reserved by the CPU, must be 0
 } __packed idt_entry_t;
 
 typedef struct idt_ptr_struct {
     unsigned short limit; // size of the IDT in bytes - 1
-    unsigned int base;    // address of the first entry in the IDT
+    unsigned long base;   // address of the first entry (64-bit, matches sidt/lidt in long mode)
 } __packed idt_ptr_t;
 
 typedef struct _iobuf {
@@ -106,7 +109,7 @@ void* memmove(void* dest, const void* src, unsigned int n);
 /// @param ptr2 The second block of memory to compare
 /// @param n The number of bytes to compare
 /// @return 0 if the blocks are equal, a negative number if ptr1 is less than ptr2, and a positive number if ptr1 is greater than ptr2
-void* memcmp(const void* ptr1, const void* ptr2, unsigned int n);
+int memcmp(const void* ptr1, const void* ptr2, unsigned int n);
 
 /// @brief Searches for a specific value in a block of memory
 /// @param ptr The block of memory to search

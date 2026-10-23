@@ -1,6 +1,6 @@
 #include "Stellar.h"
 
-idt_entry_t idt[256] = {0};
+idt_entry_t idt[256] = {0}; // 64-bit gates: 16 bytes each, 4 KB total
 idt_ptr_t idt_ptr = {0};
 
 int strlen(char* str) {
@@ -366,12 +366,12 @@ void* memmove(void* dest, const void* src, unsigned int n) {
     return dest;
 }
 
-void* memcmp(const void* ptr1, const void* ptr2, unsigned int n) {
+int memcmp(const void* ptr1, const void* ptr2, unsigned int n) {
     const char* p1 = (const char*)ptr1;
     const char* p2 = (const char*)ptr2;
     for (unsigned int i = 0; i < n; i++) {
         if (p1[i] != p2[i]) {
-            return (void*)(p1[i] - p2[i]);
+            return p1[i] - p2[i];
         }
     }
     return 0;
@@ -498,8 +498,8 @@ void get_current_idt(void)
 }
 
 idt_ptr_t get_idt(void) {
-    idt_ptr.limit = sizeof(idt_entry_t) * 256 - 1;
-    idt_ptr.base = (unsigned int)idt; // Ensure the base points to the actual IDT array
+    idt_ptr.limit = sizeof(idt_entry_t) * 256 - 1; // 4095 on x86-64 (16-byte gates)
+    idt_ptr.base = (unsigned long)idt;
     return idt_ptr;
 }
 
@@ -511,18 +511,23 @@ void set_idt(idt_ptr_t idt_ptr) {
 
 void set_idt_gate(unsigned char num, unsigned long base, unsigned short sel, unsigned char flags)
 {
-    idt[num].base_low = base & 0xFFFF;
-    idt[num].base_high = (base >> 16) & 0xFFFF;
+    idt[num].base_low = base & 0xFFFF;                          // bits 0..15
+    idt[num].base_mid = (base >> 16) & 0xFFFF;                  // bits 16..31
+    idt[num].base_high = (unsigned int)(base >> 32);            // bits 32..63
     idt[num].selector = sel;
-    idt[num].zero = 0;
+    idt[num].ist = 0;
     idt[num].flags = flags | 0x60; // Present and interrupt gate
+    idt[num].reserved = 0;
 }
 unsigned long get_idt_gate_base(unsigned char num)
 {
     if (num >= 256) {
         return 0; // Return 0 for invalid IDT entry numbers
     }
-    return ((unsigned long)idt[num].base_high << 16) | (unsigned long)idt[num].base_low; // Combine high and low parts of the base address
+    // Reassemble the full 64-bit handler address
+    return ((unsigned long)idt[num].base_high << 32)
+         | ((unsigned long)idt[num].base_mid << 16)
+         | (unsigned long)idt[num].base_low;
 }
 
 
