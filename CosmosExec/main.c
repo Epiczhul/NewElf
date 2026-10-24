@@ -15,7 +15,7 @@ NO_NAME_MANGLE void main(void*** funcTable) {
 
     clrscr();
 
-    printf("Enter file name: ");
+    printf("Enter file name (e.g. /mnt/test.txt): ");
     scanf("%s", file);
     printf("File name: %s\n", file);
 
