@@ -1,9 +1,11 @@
 #pragma once
 #include "Stellar.h"
 #define PREVENT_ENCODING_MANGLING
-#define main __stdcall _start
+/// The kernel is x86-64 and follows the SysV AMD64 ABI, so the entry point is
+/// a plain symbol (no __stdcall) and FUNC_ is empty.
+#define main _start
 #define COSMOS_INIT() debug_serial_init(); Cosmos_RegisterFunctionTable(funcTable);
-#define FUNC_ __cdecl
+#define FUNC_
 
 /// @brief Register the function table for the kernel to call
 /// @param funcTable The function table to register
@@ -85,8 +87,8 @@ void Console_WriteDouble(double num);
 void Console_Clear(void);
 
 /// @brief Set the cursor position in the console
-/// @param x The x coordinate of the cursor
-/// @param y The y coordinate of the cursor
+/// @param x The x coordinate of the cursor (column, 0-based)
+/// @param y The y coordinate of the cursor (row, 0-based)
 void Console_SetCursorPosition(int x, int y);
 
 /// @brief Allocate memory from the heap
