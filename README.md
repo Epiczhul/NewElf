@@ -4,7 +4,9 @@ https://github.com/Guillermo-Santos/StarElf
 
 ## Overview
 
-This project allows you to load and execute ELF files within a Cosmos-based C# operating system. It provides a small library with utility functions to interact with the operating system through direct function calls, including handling console input/output and memory management. (More functions will be added in the future.)
+This project allows you to load and execute ELF files within a Cosmos-based C# operating system. It provides a small library with utility functions to interact with the operating system through direct function calls, including handling console input/output and memory management.
+
+**This version targets Cosmos gen3** (NativeAOT, x86-64). The original gen2 (IL2CPU) version lives in the [upstream StarElf repository](https://github.com/Guillermo-Santos/StarElf).
 
 ### Example Usage in C
 
@@ -23,10 +25,10 @@ NO_NAME_MANGLE void main(void*** funcTable) {
 
     get_current_idt();
     idt_ptr_t idt = get_idt();
-    set_idt_gate(0x80, (int)example_IDT_GATE, 0x08, 0x8E);
+    set_idt_gate(0x80, (unsigned long)example_IDT_GATE, 0x08, 0x8E);
     set_idt(idt);
 
-    printf("IDT: 0x%p\n", &idt);
+    printf("IDT: 0x%lx\n", (unsigned long)&idt);
 
     asm volatile("int $0x80");
 
@@ -38,101 +40,79 @@ NO_NAME_MANGLE void main(void*** funcTable) {
 
 ### Key Features
 
-- **IDT Management**: Functions to set and retrieve the IDT (Interrupt Descriptor Table).
+- **ELF64 Loading**: Loads and executes x86-64 ELF binaries (static PIE) inside a Cosmos gen3 kernel, including `R_X86_64_RELATIVE` / `R_X86_64_IRELATIVE` relocation processing.
+- **IDT Management**: Functions to set and retrieve the IDT (64-bit gate format, long mode).
 - **Console Operations**: Includes functions for writing and reading text (UTF-16/ASCII) and clearing the console screen.
-- **Memory Management**: Functions to allocate, free, and manipulate memory (malloc, calloc, realloc).
+- **Memory Management**: Functions to allocate, free, and manipulate memory (malloc, calloc, realloc) backed by the gen3 heap via `NativeMemory`.
 - **Basic I/O Functions**: Support for printing integers, floats, and other data types to the console.
-- **ELF File Loading**: Enables loading ELF files into memory and executing them in a Cosmos OS environment.
+- **File I/O**: fopen/fread/fwrite/fseek/... on top of the gen3 VFS (`System.IO`).
 
-### Functions Provided
+### Repository layout (gen3)
 
-- **IDT Functions**:
-  - `set_idt_gate()`, `get_idt()`, `set_idt()`
-- **Console Functions**:
-  - `Console_WriteLine16()`, `Console_Write16()`, `Console_ReadLine16()`
-  - `Console_WriteLineA()`, `Console_WriteA()`, `Console_ReadLineA()`, etc...
-- **Memory Management**:
-  - `Heap_Alloc()`, `Heap_Free()`
-- **ELF Loader**: Load and execute ELF files within the Cosmos OS environment.
-  
-### Getting Started
+| Path | What it is |
+|------|------------|
+| `NewElf.Kernel/` | The Cosmos gen3 kernel project (NativeAOT, `net10.0`, `Cosmos.Sdk`) |
+| `NewElf.Kernel/Drivers/ELF/Elf64.cs` | The ELF64 loader (ex `Elf32`, ported to 64-bit + relocations) |
+| `NewElf.Kernel/Drivers/ELF/ELFTable.cs` | The function table (`CosmosCallsImpl`) handed to every loaded ELF |
+| `NewElf.Kernel/Drivers/ELF/TestElfBytes.cs` | The test ELF embedded as a C# byte array (gen3 has no `ManifestResourceStream`) |
+| `NewElf.Kernel/Kernel.cs` | Demo kernel: RAM-disk FAT volume, writes the test ELF, loads and runs it |
+| `CosmosExec/` | The C side: Stellib (libc subset + Cosmos bindings) and the demo program |
+| `CosmosExec/TestElf` | The compiled x86-64 test ELF (`make` output, committed for convenience) |
 
-1. Download the project files.
-2. Open the `CosmosExec` DIR to find the C files.
-<br/> 2.1 You can compile these with `make`. Run `make build` to compile the project. (Auto copied)
-3. Open the `RawExecution` DIR to find the C# files and kernel.
-4. Play/Build as normal in Visual Studio.
-5. That's it! You can now run the kernel and load ELF files.
+The `CodeExecutionPlugs` project from the gen2 version is gone: gen3 replaces the IL2CPU plug system with the IL patcher, and the two XSharp assembly stubs (`ExecuteBinary`, `RestoreStack`) are simply not needed anymore - under NativeAOT a call into raw code is a plain `delegate* unmanaged[Cdecl]` indirect call that already follows the SysV AMD64 ABI.
 
-### C# Integration
+## Getting Started (Cosmos gen3)
 
-```c#
-using Cosmos.Core;
-using Cosmos.Core.Memory;
-using Cosmos.HAL;
-using Stellib.Drivers.Injection;
-using System;
-using System.Collections.Generic;
-using System.Text;
-using Sys = Cosmos.System;
-using Stellib.ELF;
-using IL2CPU.API.Attribs;
-using XSharp.Assembler;
-using Cosmos.Core_Asm;
-namespace RawExecution
-{
-    public unsafe class Kernel : Sys.Kernel
-    {
-        [ManifestResourceStream(ResourceName = "RawExecution.Drivers.ELF.TestElf")]
-        public static byte[] TestElf;
-        protected override void BeforeRun()
-        {
-            byte[] nElf = new byte[TestElf.Length];
-            for (int i = 0; i < TestElf.Length; i++)
-            {
-                nElf[i] = TestElf[i];
-            }
-            Elf32 elf = new Elf32(nElf);
-            elf.PrintElfInfo();
-            elf.LoadElf();
-            Console.WriteLine("COSMOS: Control Regained."); 
-        }
+1. Install the gen3 toolchain: the [.NET 10 SDK](https://dotnet.microsoft.com/download) plus the Cosmos CLI (`dotnet tool install -g Cosmos.Tools && cosmos install`, or the Windows installer from the [Cosmos releases](https://github.com/CosmosOS/Cosmos/releases)). Verify with `cosmos check`.
+2. Open `NewElf.Kernel/` and run the kernel:
+   ```console
+   $ cd NewElf.Kernel
+   $ cosmos run
+   ```
+   The demo kernel creates a 32 MiB RAM disk, formats it FAT16, mounts it at `/mnt`, drops the embedded test ELF on it, prints the ELF headers, then jumps into the ELF: it asks for a file name (type `/mnt/test.txt`) and dumps the file through the function table.
+3. To run on a real disk image instead of the RAM disk, replace the `SetupRamDisk()` call with a mount of `StorageManager.Partitions[0]` and attach the image with `cosmos run --disk disk.img`.
 
-        protected override void Run()
-        {
-        }
-    }
-}
+### Building your own ELF programs
+
+```console
+$ cd CosmosExec
+$ make          # builds TestElf (gcc -m64, static PIE)
+$ make embed    # copies it into the kernel project and regenerates TestElfBytes.cs
 ```
 
-### Current Rewrite of STDLIB
+Requirements for ELFs loaded by NewElf on gen3:
 
-```c++
-void* malloc(size_t size);
-void free(void* ptr);
-void* calloc(size_t num, size_t size);
-void* realloc(void* ptr, size_t size);
-int isspace(int c);
-void itoa(int num, char* str, int base);
-void ltoa(long num, char* str, int base);
-void utoa(unsigned int num, char* str, int base);
-void ultoa(unsigned long num, char* str, int base);
-void uitoa(unsigned int num, char* str, int base);
-void atoi(int num, char* str, int base);
-void printf(const char* format, ...);
-int sprintf(char* str, const char* format, ...);
-int snprintf(char* str, size_t size, const char* format, ...);
-void vsnprintf(char *str, size_t size, const char *format, va_list args);
-void vsprintf(char* str, const char* format, va_list ap);
-void clrscr(void);
-void gets(char* str, size_t size);
-int scanf(const char *fmt, ...);
-int sscanf(const char* str, const char* format, ...);
-FILE* fopen(const char* filename, const char* mode);
-int fclose(FILE* file);
-int fread(void* buffer, unsigned int size, unsigned int nmemb, FILE* stream);
-int fwrite(void* buffer, unsigned int size, unsigned int nmemb, FILE* stream);
-int fseek(FILE* stream, int offset, int whence);
-int ftell(FILE* stream);
-int fflush(FILE* stream);
-```
+- **x86-64** - the kernel runs in long mode; 32-bit ELFs are rejected.
+- **Static PIE** (`gcc -static-pie`) - so the binary only needs `R_X86_64_RELATIVE` relocations and can run from any base address. Non-PIE binaries crash, since the loader cannot honor their absolute addresses.
+- **`-mno-red-zone`** - the loaded code runs with interrupts enabled on the kernel stack.
+- Entry point receives `void*** funcTable` as its first argument (see below).
+
+### Function table
+
+Unchanged since gen2: the entry point gets a `void***` with four classes:
+
+| Class | Contents |
+|-------|----------|
+| 0 | Console: `WriteLine16`, `Write16`, `ReadLine16`, `WriteLine/WriteInt32`, `...UInt32`, `...Int64`, `...UInt64`, `...Float`, `...Double`, `Clear`, `SetCursorPosition` |
+| 1 | Heap: `Alloc(uint)`, `Free(void*)` |
+| 2 | File: `Open(path, mode)`, `Close`, `Read`, `Write`, `Seek`, `Tell`, `Flush` |
+| 3 | Misc: `GetArgs(int* argc, char*** argv)` |
+
+The C wrappers for all of these live in `CosmosExec/Cosmos.c`; a libc subset (malloc, printf, scanf, fopen, ...) on top of them lives in `CosmosExec/Stellar.c`.
+
+## What changed for gen3 (migration notes)
+
+| | gen2 | gen3 |
+|---|------|------|
+| Compiler | IL2CPU (x86, 32-bit) | NativeAOT (`net10.0`, x86-64) |
+| Kernel project | `RawExecution`, `Microsoft.NET.Sdk`, `net6.0`, packages `Cosmos.System2`/`Cosmos.Debug.Kernel`/`Cosmos.Plugs` | `NewElf.Kernel`, `Cosmos.Sdk`, `net10.0`, packages `Cosmos.Kernel` + `Cosmos.Kernel.System` |
+| Kernel base class | `Cosmos.System.Kernel` | `Cosmos.Kernel.System.Kernel` (same `BeforeRun`/`Run`/`AfterRun`/`Stop` lifecycle) |
+| Raw memory | `Cosmos.Core.Memory.Heap.Alloc/Free` | `System.Runtime.InteropServices.NativeMemory.Alloc/Free` (plugged onto the gen3 heap) |
+| Embedded resources | `[ManifestResourceStream]` | Not supported - the test ELF ships as the generated `TestElfBytes.cs` (`make embed`) |
+| VFS setup | `CosmosVFS` + `VFSManager.RegisterVFS`, DOS paths (`0:\file`) | RAM disk / `FatFileSystemType` + `VfsManager.RegisterFileSystem` + `TryMount`, Unix paths (`/mnt/file`), full `System.IO` |
+| Calling convention | IL2CPU custom, args pushed in reverse, asm plugs to call into raw code | Standard SysV AMD64 ABI; plain `delegate* unmanaged[Cdecl]` calls, no plugs, no stack repair |
+| ELF format | 32-bit (`Elf32`) | 64-bit (`Elf64`), static PIE, relocations applied by the loader |
+| IDT gates | 8-byte 32-bit entries | 16-byte 64-bit entries (`idt_entry_t` in `Stellar.h`) |
+| Serial debug | COM1 @ 115200 | COM1 @ 115200 (gen3 initializes it during boot) |
+
+Also fixed while porting (bugs present in gen2): the `PREVENT_ENCODING_MANGLING` encoding switch recursed into itself and overflowed the stack when mixing `Console_*A` and `Console_*16` calls, `memcmp` had the wrong return type, and `Stellar.h`'s `typedef unsigned int size_t;` broke on 64-bit.
