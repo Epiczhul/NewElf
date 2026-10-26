@@ -59,7 +59,7 @@ NO_NAME_MANGLE void main(void*** funcTable) {
 | `CosmosExec/` | The C side: Stellib (libc subset + Cosmos bindings) and the demo program |
 | `CosmosExec/TestElf` | The compiled x86-64 test ELF (`make` output, committed for convenience) |
 
-The `CodeExecutionPlugs` project from the gen2 version is gone: gen3 replaces the IL2CPU plug system with the IL patcher, and the two XSharp assembly stubs (`ExecuteBinary`, `RestoreStack`) are simply not needed anymore - under NativeAOT a call into raw code is a plain `delegate* unmanaged[Cdecl]` indirect call that already follows the SysV AMD64 ABI.
+The `CodeExecutionPlugs` project from the gen2 version is gone: gen3 replaces the IL2CPU plug system with the IL patcher, and the two XSharp assembly stubs (`ExecuteBinary`, `RestoreStack`) are simply not needed anymore, under NativeAOT a call into raw code is a plain `delegate* unmanaged[Cdecl]` indirect call that already follows the SysV AMD64 ABI.
 
 ## Getting Started (Cosmos gen3)
 
@@ -82,9 +82,9 @@ $ make embed    # copies it into the kernel project and regenerates TestElfBytes
 
 Requirements for ELFs loaded by NewElf on gen3:
 
-- **x86-64** - the kernel runs in long mode; 32-bit ELFs are rejected.
-- **Static PIE** (`gcc -static-pie`) - so the binary only needs `R_X86_64_RELATIVE` relocations and can run from any base address. Non-PIE binaries crash, since the loader cannot honor their absolute addresses.
-- **`-mno-red-zone`** - the loaded code runs with interrupts enabled on the kernel stack.
+- **x86-64**, the kernel runs in long mode, 32-bit ELFs are rejected.
+- **Static PIE** (`gcc -static-pie`), so the binary only needs `R_X86_64_RELATIVE` relocations and can run from any base address. Non-PIE binaries crash, since the loader cannot honor their absolute addresses.
+- **`-mno-red-zone`**, the loaded code runs with interrupts enabled on the kernel stack.
 - Entry point receives `void*** funcTable` as its first argument (see below).
 
 ### Function table
@@ -98,21 +98,4 @@ Unchanged since gen2: the entry point gets a `void***` with four classes:
 | 2 | File: `Open(path, mode)`, `Close`, `Read`, `Write`, `Seek`, `Tell`, `Flush` |
 | 3 | Misc: `GetArgs(int* argc, char*** argv)` |
 
-The C wrappers for all of these live in `CosmosExec/Cosmos.c`; a libc subset (malloc, printf, scanf, fopen, ...) on top of them lives in `CosmosExec/Stellar.c`.
-
-## What changed for gen3 (migration notes)
-
-| | gen2 | gen3 |
-|---|------|------|
-| Compiler | IL2CPU (x86, 32-bit) | NativeAOT (`net10.0`, x86-64) |
-| Kernel project | `RawExecution`, `Microsoft.NET.Sdk`, `net6.0`, packages `Cosmos.System2`/`Cosmos.Debug.Kernel`/`Cosmos.Plugs` | `NewElf.Kernel`, `Cosmos.Sdk`, `net10.0`, packages `Cosmos.Kernel` + `Cosmos.Kernel.System` |
-| Kernel base class | `Cosmos.System.Kernel` | `Cosmos.Kernel.System.Kernel` (same `BeforeRun`/`Run`/`AfterRun`/`Stop` lifecycle) |
-| Raw memory | `Cosmos.Core.Memory.Heap.Alloc/Free` | `System.Runtime.InteropServices.NativeMemory.Alloc/Free` (plugged onto the gen3 heap) |
-| Embedded resources | `[ManifestResourceStream]` | Not supported - the test ELF ships as the generated `TestElfBytes.cs` (`make embed`) |
-| VFS setup | `CosmosVFS` + `VFSManager.RegisterVFS`, DOS paths (`0:\file`) | RAM disk / `FatFileSystemType` + `VfsManager.RegisterFileSystem` + `TryMount`, Unix paths (`/mnt/file`), full `System.IO` |
-| Calling convention | IL2CPU custom, args pushed in reverse, asm plugs to call into raw code | Standard SysV AMD64 ABI; plain `delegate* unmanaged[Cdecl]` calls, no plugs, no stack repair |
-| ELF format | 32-bit (`Elf32`) | 64-bit (`Elf64`), static PIE, relocations applied by the loader |
-| IDT gates | 8-byte 32-bit entries | 16-byte 64-bit entries (`idt_entry_t` in `Stellar.h`) |
-| Serial debug | COM1 @ 115200 | COM1 @ 115200 (gen3 initializes it during boot) |
-
-Also fixed while porting (bugs present in gen2): the `PREVENT_ENCODING_MANGLING` encoding switch recursed into itself and overflowed the stack when mixing `Console_*A` and `Console_*16` calls, `memcmp` had the wrong return type, and `Stellar.h`'s `typedef unsigned int size_t;` broke on 64-bit.
+The C wrappers for all of these live in `CosmosExec/Cosmos.c`, a libc subset (malloc, printf, scanf, fopen, ...) on top of them lives in `CosmosExec/Stellar.c`.
