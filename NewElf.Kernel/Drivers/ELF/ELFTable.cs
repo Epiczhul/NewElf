@@ -7,11 +7,9 @@ using System.Runtime.InteropServices;
 namespace NewElf.Drivers.ELF
 {
     /// <summary>
-    /// Builds the function table handed to every loaded ELF as its first
-    /// argument. Layout:
-    ///   class 0 = console, class 1 = heap, class 2 = file, class 3 = misc.
-    /// The raw allocations go through System.Runtime.InteropServices.NativeMemory,
-    /// which Cosmos plugs onto its own heap.
+    /// Builds the function table that every loaded ELF gets as its first argument.
+    /// Classes: 0 = console, 1 = heap, 2 = file, 3 = misc.
+    /// Allocations go through NativeMemory.
     /// </summary>
     public static unsafe class CosmosCallsImpl
     {

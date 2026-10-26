@@ -26,8 +26,7 @@ public unsafe class NewElfKernel : Sys.Kernel
     {
         SetupRamDisk();
 
-        // Drop a couple of files on the volume: the embedded 64-bit test ELF
-        // and a small greeting, then load the ELF from disk and run it.
+        // write the test ELF and a text file to the disk, then run the ELF
         File.WriteAllText("/mnt/test.txt", "Haii!! :3");
         Directory.CreateDirectory("/mnt/elfs");
         File.WriteAllBytes(ElfPath, TestElfBytes.TestElf);
@@ -45,10 +44,8 @@ public unsafe class NewElfKernel : Sys.Kernel
     }
 
     /// <summary>
-    /// Registers a RAM backed FAT volume at <see cref="MountPoint"/> so the
-    /// demo has a filesystem to work with without needing a disk image.
-    /// Attach a real disk with 'cosmos run --disk disk.img' and mount
-    /// StorageManager.Partitions[0] instead if you prefer a persistent volume.
+    /// Mounts a RAM backed FAT volume at <see cref="MountPoint"/> so the demo
+    /// works without a disk image.
     /// </summary>
     private static void SetupRamDisk()
     {

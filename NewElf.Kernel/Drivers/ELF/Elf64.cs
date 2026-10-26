@@ -182,12 +182,10 @@ namespace NewElf.ELF
     }
 
     /// <summary>
-    /// ELF64 loader. Loads PT_LOAD segments into one contiguous
-    /// NativeMemory block, applies the R_X86_64_RELATIVE / R_X86_64_IRELATIVE
-    /// relocations a static-PIE build carries, then jumps to the entry point
-    /// with the Cosmos function table (see CosmosCallsImpl).
-    /// The ELF must be x86-64 (the kernel runs in long mode) and should be
-    /// linked with 'gcc -static-pie' so it can execute from any base address.
+    /// ELF64 loader. Copies the PT_LOAD segments into one NativeMemory block,
+    /// applies the relocations of a static PIE build and calls the entry point
+    /// with the function table from CosmosCallsImpl.
+    /// The ELF has to be x86-64 and linked with 'gcc -static-pie'.
     /// </summary>
     public unsafe class Elf64
     {
@@ -204,7 +202,7 @@ namespace NewElf.ELF
         private byte* FileStart;
         private byte[] FileBytes = null!;
 
-        // Memory tracking
+        // loaded block and its size
         private IntPtr LoadBase = IntPtr.Zero;
         private uint TotalMemSize = 0;
         private uint EntryPointOffset = 0;
@@ -280,11 +278,9 @@ namespace NewElf.ELF
 
         private void CalculateMemoryRequirements()
         {
-            // Reserve the full span the ELF expects, keyed off its linked
-            // virtual addresses. Loading every segment at
-            // (p_vaddr - MinVaddr) keeps every RIP-relative reference the
-            // linker baked in valid, both inside a segment and across
-            // segments, no matter where the block actually lands.
+            // Reserve the whole address range of the ELF and place every segment at
+            // (p_vaddr - MinVaddr), so RIP-relative references between segments
+            // still work wherever the block ends up.
             MinVaddr = ulong.MaxValue;
             MaxVaddr = 0;
 
