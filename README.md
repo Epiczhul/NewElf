@@ -52,7 +52,7 @@ NO_NAME_MANGLE void main(void*** funcTable) {
 | `NewElf.Kernel/` | The Cosmos gen3 kernel project (NativeAOT, `net10.0`, `Cosmos.Sdk`) |
 | `NewElf.Kernel/Drivers/ELF/Elf64.cs` | The ELF64 loader (ex `Elf32`, ported to 64-bit + relocations) |
 | `NewElf.Kernel/Drivers/ELF/ELFTable.cs` | The function table (`CosmosCallsImpl`) handed to every loaded ELF |
-| `NewElf.Kernel/Drivers/ELF/TestElfBytes.cs` | The test ELF embedded as a C# byte array (gen3 has no `ManifestResourceStream`) |
+| `NewElf.Kernel/Drivers/ELF/TestElfBytes.cs` | The test ELF embedded as a C# byte array |
 | `NewElf.Kernel/Kernel.cs` | Demo kernel: RAM-disk FAT volume, writes the test ELF, loads and runs it |
 | `CosmosExec/` | The C side: Stellib (libc subset + Cosmos bindings) and the demo program |
 | `CosmosExec/TestElf` | The compiled x86-64 test ELF (`make` output, committed for convenience) |
