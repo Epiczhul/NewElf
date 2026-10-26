@@ -89,7 +89,7 @@ Requirements for ELFs loaded by NewElf on gen3:
 
 ### Function table
 
-Unchanged since gen2: the entry point gets a `void***` with four classes:
+The entry point gets a `void***` with four classes:
 
 | Class | Contents |
 |-------|----------|
