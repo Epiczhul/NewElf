@@ -6,7 +6,6 @@ https://github.com/Guillermo-Santos/StarElf
 
 This project allows you to load and execute ELF files within a Cosmos-based C# operating system. It provides a small library with utility functions to interact with the operating system through direct function calls, including handling console input/output and memory management.
 
-**This version targets Cosmos gen3** (NativeAOT, x86-64). The original gen2 (IL2CPU) version lives in the [upstream StarElf repository](https://github.com/Guillermo-Santos/StarElf).
 
 ### Example Usage in C
 
