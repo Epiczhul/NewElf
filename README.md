@@ -35,7 +35,6 @@ NO_NAME_MANGLE void main(void*** funcTable) {
 }
 ```
 
-![The Loader In Action](_ghimgs/cproof.png)
 
 ### Key Features
 
