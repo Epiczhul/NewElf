@@ -1,4 +1,6 @@
-# Star Elf (Stellar's Awesome Reader [for] ELF)
+# NewElf
+THIS IS A HARD-FORK OF:
+https://github.com/Guillermo-Santos/StarElf
 
 ## Overview
 
