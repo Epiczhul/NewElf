@@ -31,12 +31,17 @@ public unsafe class NewElfKernel : Sys.Kernel
         Directory.CreateDirectory("/mnt/elfs");
         File.WriteAllBytes(ElfPath, TestElfBytes.TestElf);
 
+        // argv[0] is the binary, argv[1] hands the demo a file to read so
+        // it does not sit around waiting for typed input
+        ElfArgs.SetArgs(new[] { ElfPath, "/mnt/test.txt" });
+
         Elf64 elf = new(ElfPath);
         elf.PrintElfInfo();
         elf.LoadAndExecuteElf();
         elf.FreeElf();
 
         Console.WriteLine("COSMOS: Control Regained.");
+        Console.WriteLine("COSMOS: ELF exit code: " + elf.ExitCode);
     }
 
     protected override void Run()
