@@ -183,8 +183,9 @@ namespace NewElf.ELF
 
     /// <summary>
     /// ELF64 loader. Copies the PT_LOAD segments into one NativeMemory block,
-    /// applies the relocations of a static PIE build and calls the entry point
-    /// with the function table from CosmosCallsImpl.
+    /// applies the relocations of a static PIE build and enters the entry
+    /// point with the function table in RDI and a SysV process start block on
+    /// its stack. The run ends through the exit call or a caught CPU fault.
     /// The ELF has to be x86-64 and linked with 'gcc -static-pie'.
     /// </summary>
     public unsafe class Elf64
@@ -208,6 +209,37 @@ namespace NewElf.ELF
         private uint EntryPointOffset = 0;
         private ulong MinVaddr = ulong.MaxValue; // lowest p_vaddr of all PT_LOAD segments
         private ulong MaxVaddr = 0;              // highest p_vaddr + p_memsz
+
+        // stack block for the ELF, freed after the run
+        private IntPtr StackBlock = IntPtr.Zero;
+
+        /// <summary>
+        /// Exit code of the last run, or 128 + vector if a fault killed the ELF.
+        /// </summary>
+        public int ExitCode { get; private set; } = -1;
+
+        // SysV auxiliary vector tags
+        private const ulong AT_NULL = 0;
+        private const ulong AT_PHDR = 3;
+        private const ulong AT_PHENT = 4;
+        private const ulong AT_PHNUM = 5;
+        private const ulong AT_PAGESZ = 6;
+        private const ulong AT_BASE = 7;
+        private const ulong AT_FLAGS = 8;
+        private const ulong AT_ENTRY = 9;
+        private const ulong AT_UID = 11;
+        private const ulong AT_EUID = 12;
+        private const ulong AT_GID = 13;
+        private const ulong AT_EGID = 14;
+        private const ulong AT_HWCAP = 16;
+        private const ulong AT_CLKTCK = 17;
+        private const ulong AT_SECURE = 23;
+        private const ulong AT_RANDOM = 25;
+        private const ulong AT_EXECFN = 31;
+        private const ulong AT_PLATFORM = 15;
+
+        // stack handed to the ELF, 64 KiB is plenty for a small C runtime
+        private const int StartupStackSize = 64 * 1024;
 
         public Elf64(string path)
         {
@@ -438,6 +470,10 @@ namespace NewElf.ELF
             }
         }
 
+        /// <summary>
+        /// Builds the start block and runs the ELF through <see cref="FaultManager"/>.
+        /// <see cref="ExitCode"/> is set when it comes back.
+        /// </summary>
         private void ExecuteEntryPoint()
         {
             if (LoadBase == IntPtr.Zero)
@@ -445,27 +481,176 @@ namespace NewElf.ELF
 
             byte* entryPoint = (byte*)LoadBase + EntryPointOffset;
 
-            // Build the Cosmos function table the ELF receives as first argument
+            // Build the Cosmos function table. The ELF gets it in RDI (the
+            // first SysV argument register), the process start block waits
+            // on the stack its entry point finds at RSP.
             void*** calls = CosmosCallsImpl.BuildCalls();
+
+            byte* stackTop = BuildStartupStack();
+
+            // A GC during the run would walk the ELF stack and miss the
+            // references held by the frozen kernel frames, so pause it.
+            // The 64 MiB budget has to cover everything the ELF allocates.
+            bool noGc = GC.TryStartNoGCRegion(64 * 1024 * 1024);
+            if (!noGc)
+                Console.WriteLine("NewElf: warning, could not pause the GC for the ELF run.");
 
             try
             {
-                // Raw call using a function pointer. Under NativeAOT this compiles
-                // to a plain indirect call following the SysV AMD64 ABI, so no
-                // assembly stubs are needed.
-                RawCall(entryPoint, calls);
+                FaultManager.BeginElf((ulong)LoadBase, (ulong)LoadBase + TotalMemSize);
+                ExitCode = FaultManager.Run(calls, entryPoint, stackTop);
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Error executing ELF: {ex.Message}");
             }
+            finally
+            {
+                FaultManager.EndElf();
+
+                if (StackBlock != IntPtr.Zero)
+                {
+                    NativeMemory.Free((void*)StackBlock);
+                    StackBlock = IntPtr.Zero;
+                }
+
+                if (noGc)
+                {
+                    // the region can end on its own when the budget runs out
+                    try { GC.EndNoGCRegion(); }
+                    catch (InvalidOperationException) { }
+                }
+            }
         }
 
-        // Raw function call implementation
-        private unsafe void RawCall(byte* funcPtr, void*** callList)
+        /// <summary>
+        /// Builds the SysV process start block the ELF finds on its stack:
+        /// argc, argv, NULL, envp (just a NULL), the auxiliary vector and the
+        /// strings they point at. A static PIE reads AT_PHDR and friends
+        /// from here, so the layout has to match Linux.
+        /// </summary>
+        private byte* BuildStartupStack()
         {
-            delegate* unmanaged[Cdecl]<void***, void> entryFunc = (delegate* unmanaged[Cdecl]<void***, void>)funcPtr;
-            entryFunc(callList);
+            byte* stack = (byte*)NativeMemory.Alloc(StartupStackSize);
+            StackBlock = (IntPtr)stack;
+
+            string[] args = CosmosCallsImpl.ProgramArgs;
+            if (args.Length == 0)
+                args = new[] { Path };
+
+            byte* cur = stack + StartupStackSize;
+
+            // 16 bytes of randomness for AT_RANDOM, stack canary seed and such
+            cur -= 16;
+            cur = AlignDown(cur, 16);
+            byte* randomPtr = cur;
+            byte[] randomBytes = new byte[16];
+            Random.Shared.NextBytes(randomBytes);
+            for (int i = 0; i < 16; i++)
+                randomPtr[i] = randomBytes[i];
+
+            byte* platformPtr = WriteAsciiDown(ref cur, "x86_64");
+            byte* execFnPtr = WriteAsciiDown(ref cur, Path);
+
+            byte** argPtrs = stackalloc byte*[args.Length];
+            for (int i = 0; i < args.Length; i++)
+                argPtrs[i] = WriteAsciiDown(ref cur, args[i]);
+
+            ulong[] types =
+            {
+                AT_PHDR, AT_PHENT, AT_PHNUM, AT_PAGESZ, AT_BASE, AT_FLAGS, AT_ENTRY,
+                AT_UID, AT_EUID, AT_GID, AT_EGID, AT_HWCAP, AT_CLKTCK, AT_SECURE,
+                AT_PLATFORM, AT_RANDOM, AT_EXECFN, AT_NULL
+            };
+            ulong[] values =
+            {
+                ProgramHeaderAddress(), Header.PhEntSize, Header.PhNum, 4096, 0, 0, EntryAddress(),
+                0, 0, 0, 0, 0, 100, 0,
+                (ulong)platformPtr, (ulong)randomPtr, (ulong)execFnPtr, AT_NULL
+            };
+
+            // argc, argv + NULL, envp NULL and one 16 byte pair per auxv entry
+            ulong metaSize = 8 + 8 * ((ulong)args.Length + 1) + 8 + 16 * (ulong)types.Length;
+
+            byte* blockEnd = AlignDown(cur, 8);
+            byte* blockStart = blockEnd - (long)metaSize;
+            // push the whole block down until argc sits on a 16 byte boundary
+            blockEnd -= (long)((ulong)blockStart & 0xF);
+            blockStart = blockEnd - (long)metaSize;
+
+            byte* p = blockEnd;
+            for (int i = types.Length - 1; i >= 0; i--)
+            {
+                p -= 16;
+                *(ulong*)p = types[i];
+                *(ulong*)(p + 8) = values[i];
+            }
+
+            // envp: a single NULL, the kernel does not pass an environment
+            p -= 8;
+            *(ulong*)p = 0;
+
+            // argv: NULL terminator first (it sits above the pointers), then
+            // the pointers, then argc on top. Written top down, read bottom up.
+            p -= 8;
+            *(ulong*)p = 0;
+            for (int i = args.Length - 1; i >= 0; i--)
+            {
+                p -= 8;
+                *(byte**)p = argPtrs[i];
+            }
+            p -= 8;
+            *(ulong*)p = (ulong)args.Length;
+
+            return p;
+        }
+
+        /// <summary>
+        /// Writes an ASCII copy of a string below the current cursor and
+        /// returns the address of the NUL terminated copy.
+        /// </summary>
+        private byte* WriteAsciiDown(ref byte* cur, string s)
+        {
+            cur -= s.Length + 1;
+            for (int i = 0; i < s.Length; i++)
+                cur[i] = (byte)s[i];
+            cur[s.Length] = 0;
+            return cur;
+        }
+
+        private static byte* AlignDown(byte* p, ulong alignment)
+            => (byte*)((ulong)p & ~(alignment - 1));
+
+        /// <summary>
+        /// Address of the program header table inside the loaded image. The
+        /// table normally sits in the first PT_LOAD segment (file offset 0),
+        /// so its address is that segment base plus the offset difference.
+        /// </summary>
+        private ulong ProgramHeaderAddress()
+        {
+            foreach (var phdr in ProgramHeaders)
+            {
+                if (phdr.Type != (uint)ElfSegmentType.Load)
+                    continue;
+
+                if (Header.PhOff >= phdr.Offset && Header.PhOff < phdr.Offset + phdr.FileSize)
+                    return (ulong)LoadBase + phdr.LoadOffset + (Header.PhOff - phdr.Offset);
+            }
+
+            // not inside any loaded segment: fall back to the flat layout
+            return (ulong)LoadBase + Header.PhOff;
+        }
+
+        /// <summary>
+        /// Actual address of the entry point inside the loaded image, the
+        /// AT_ENTRY value a static PIE cross checks against its own phdrs.
+        /// </summary>
+        private ulong EntryAddress()
+        {
+            if (Header.Entry >= MinVaddr && Header.Entry < MaxVaddr)
+                return (ulong)LoadBase + (Header.Entry - MinVaddr);
+
+            return (ulong)LoadBase + EntryPointOffset;
         }
 
         public void ReloadElf()
