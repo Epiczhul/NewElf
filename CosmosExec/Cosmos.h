@@ -1,9 +1,9 @@
 #pragma once
 #include "Stellar.h"
 #define PREVENT_ENCODING_MANGLING
-/// The kernel is x86-64 and follows the SysV AMD64 ABI, so the entry point is
-/// a plain symbol (no __stdcall) and FUNC_ is empty.
-#define main _start
+/// The kernel is x86-64 and follows the SysV AMD64 ABI. _start is in main.c,
+/// it passes the function table and the start block on to main and calls
+/// Cosmos_Exit with the return value.
 #define COSMOS_INIT() debug_serial_init(); Cosmos_RegisterFunctionTable(funcTable);
 #define FUNC_
 
@@ -148,3 +148,8 @@ int File_Flush(FILE* stream);
 /// @param argc The number of arguments
 /// @param argv The array of argument strings
 void Cosmos_Get_Program_Arguments(int* argc, char*** argv);
+
+/// @brief Hand control back to the kernel with an exit code, this is the
+/// only way a program here can end its run
+/// @param code The exit code the kernel reports for this run
+void Cosmos_Exit(int code);

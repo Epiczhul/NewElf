@@ -1179,6 +1179,7 @@ int feof(FILE *stream)
 void exit(int status)
 {
     printf("Exiting with status %d\n", status); // Print exit status
+    Cosmos_Exit(status); // unwind back into the kernel with the code
     while (1) {
     }
 }

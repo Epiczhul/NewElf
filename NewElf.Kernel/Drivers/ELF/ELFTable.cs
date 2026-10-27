@@ -15,6 +15,8 @@ namespace NewElf.Drivers.ELF
     {
         public static char** Args = null;
         public static int ArgCount = 0;
+        // argument strings, also written onto the ELF stack
+        public static string[] ProgramArgs = Array.Empty<string>();
         static List<FileStream> OpenHandles = new List<FileStream>();
         // struct to hold function data for each class
         [StructLayout(LayoutKind.Sequential)]
@@ -66,6 +68,7 @@ namespace NewElf.Drivers.ELF
 
             // misc functions
             public delegate* unmanaged[Cdecl]<int*, char***, void> GetArgsFunc;
+            public delegate* unmanaged[Cdecl]<int, void> ExitFunc;
 
             public FunctionClass(
                 delegate* unmanaged[Cdecl]<char*, void> printLineFunc,
@@ -96,7 +99,8 @@ namespace NewElf.Drivers.ELF
                 delegate* unmanaged[Cdecl]<C_FILE*, int, int, int> fileSeekFunc,
                 delegate* unmanaged[Cdecl]<C_FILE*, int> fileTellFunc,
                 delegate* unmanaged[Cdecl]<C_FILE*, int> fileFlushFunc,
-                delegate* unmanaged[Cdecl]<int*, char***, void> getArgsFunc
+                delegate* unmanaged[Cdecl]<int*, char***, void> getArgsFunc,
+                delegate* unmanaged[Cdecl]<int, void> exitFunc
                 )
 
             {
@@ -130,6 +134,7 @@ namespace NewElf.Drivers.ELF
                 FileFlushFunc = fileFlushFunc;
 
                 GetArgsFunc = getArgsFunc;
+                ExitFunc = exitFunc;
             }
         }
 
@@ -238,7 +243,8 @@ namespace NewElf.Drivers.ELF
         private static void** BuildFunctionTableForMisc()
         {
             delegate* unmanaged[Cdecl]<int*, char***, void> getArgsFunc = &Misc.GetArgs;
-            void*[] callsMisc = { getArgsFunc };
+            delegate* unmanaged[Cdecl]<int, void> exitFunc = &Misc.Exit;
+            void*[] callsMisc = { getArgsFunc, exitFunc };
             // alloc memory and populate the function table
             void** miscTable = (void**)NativeMemory.Alloc((nuint)(callsMisc.Length * sizeof(void*)));
             for (int i = 0; i < callsMisc.Length; i++)
@@ -586,6 +592,13 @@ namespace NewElf.Drivers.ELF
                 *argc = ArgCount;
                 *argv = Args;
             }
+
+            [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+            public static void Exit(int code)
+            {
+                // jumps back into FaultManager.Run with the exit code
+                FaultManager.RequestExit(code);
+            }
         }
 
         public static class APIDefaults
@@ -605,8 +618,13 @@ namespace NewElf.Drivers.ELF
             {
                 CosmosCallsImpl.Args = null;
                 CosmosCallsImpl.ArgCount = 0;
+                CosmosCallsImpl.ProgramArgs = Array.Empty<string>();
                 return;
             }
+
+            // keep the strings for the ELF stack
+            CosmosCallsImpl.ProgramArgs = args;
+
             byte** argPtrs = (byte**)NativeMemory.Alloc((nuint)(args.Length * sizeof(byte*)));
 
             for (int i = 0; i < args.Length; i++)

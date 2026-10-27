@@ -341,6 +341,20 @@ FUNC_ void Cosmos_Get_Program_Arguments(int* argc, char*** argv)
     }
 }
 
+// INDEX 1
+FUNC_ void Cosmos_Exit(int code)
+{
+    void (*exitFn)(int) = (void (*)(int)) funcTable[3][1];
+
+    if (exitFn) {
+        exitFn(code);
+    }
+
+    // should not get here
+    while (1) {
+    }
+}
+
 /// NO CLASS FUNCS
 
 FUNC_ void Console_WriteLineA(char* str)
