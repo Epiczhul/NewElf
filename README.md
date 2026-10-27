@@ -16,7 +16,7 @@ void example_IDT_GATE(void) {
     printf("Interrupt Called!\n");
 }
 
-NO_NAME_MANGLE void main(void*** funcTable) {
+NO_NAME_MANGLE int main(void*** funcTable, unsigned long* startupStack) {
     debug_serial_init();
     Cosmos_RegisterFunctionTable(funcTable);
 
@@ -31,9 +31,11 @@ NO_NAME_MANGLE void main(void*** funcTable) {
 
     asm volatile("int $0x80");
 
-    return;
+    return 0;
 }
 ```
+
+The `_start` stub that calls `main` sits at the top of `CosmosExec/main.c`, copy it into your own program. `startupStack` points at the process start block (argc, argv, envp, auxv) and the return value of `main` becomes the exit code.
 
 
 ### Key Features
@@ -67,7 +69,7 @@ The `CodeExecutionPlugs` project from the gen2 version is gone: gen3 replaces th
    $ cd NewElf.Kernel
    $ cosmos run
    ```
-   The demo kernel creates a 32 MiB RAM disk, formats it FAT16, mounts it at `/mnt`, drops the embedded test ELF on it, prints the ELF headers, then jumps into the ELF: it asks for a file name (type `/mnt/test.txt`) and dumps the file through the function table.
+   The demo kernel creates a 32 MiB RAM disk, formats it FAT16, mounts it at `/mnt`, drops the embedded test ELF on it, prints the ELF headers, then jumps into the ELF: it prints argc, argv and a few auxv entries, reads `/mnt/test.txt` (passed as `argv[1]`) and dumps the file through the function table. If no argument is given it asks for a file name instead. When the ELF ends, the kernel prints its exit code (42 for the test ELF).
 3. To run on a real disk image instead of the RAM disk, replace the `SetupRamDisk()` call with a mount of `StorageManager.Partitions[0]` and attach the image with `cosmos run --disk disk.img`.
 
 ### Building your own ELF programs
@@ -83,7 +85,7 @@ Requirements for ELFs loaded by NewElf on gen3:
 - **x86-64**, the kernel runs in long mode, 32-bit ELFs are rejected.
 - **Static PIE** (`gcc -static-pie`), so the binary only needs `R_X86_64_RELATIVE` relocations and can run from any base address. Non-PIE binaries crash, since the loader cannot honor their absolute addresses.
 - **`-mno-red-zone`**, the loaded code runs with interrupts enabled on the kernel stack.
-- Entry point receives `void*** funcTable` as its first argument (see below).
+- A `_start` entry point (`-Wl,-e,_start`), entered with the function table in RDI and a SysV process start block on the stack, see `CosmosExec/main.c`.
 
 ### Function table
 
