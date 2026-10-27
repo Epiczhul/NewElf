@@ -45,6 +45,7 @@ The `_start` stub that calls `main` sits at the top of `CosmosExec/main.c`, copy
 - **Console Operations**: Includes functions for writing and reading text (UTF-16/ASCII) and clearing the console screen.
 - **Memory Management**: Functions to allocate, free, and manipulate memory (malloc, calloc, realloc) backed by the gen3 heap via `NativeMemory`.
 - **Basic I/O Functions**: Support for printing integers, floats, and other data types to the console.
+- **Fault Isolation**: A #UD, #GP or #PF inside the ELF prints a register dump and only ends that ELF, with exit code 128 plus the vector number.
 - **File I/O**: fopen/fread/fwrite/fseek/... on top of the gen3 VFS (`System.IO`).
 
 ### Repository layout (gen3)
@@ -53,6 +54,7 @@ The `_start` stub that calls `main` sits at the top of `CosmosExec/main.c`, copy
 |------|------------|
 | `NewElf.Kernel/` | The Cosmos gen3 kernel project (NativeAOT, `net10.0`, `Cosmos.Sdk`) |
 | `NewElf.Kernel/Drivers/ELF/Elf64.cs` | The ELF64 loader (ex `Elf32`, ported to 64-bit + relocations) |
+| `NewElf.Kernel/Drivers/ELF/FaultManager.cs` | Catches CPU faults inside a running ELF and handles the exit call |
 | `NewElf.Kernel/Drivers/ELF/ELFTable.cs` | The function table (`CosmosCallsImpl`) handed to every loaded ELF |
 | `NewElf.Kernel/Drivers/ELF/TestElfBytes.cs` | The test ELF embedded as a C# byte array |
 | `NewElf.Kernel/Kernel.cs` | Demo kernel: RAM-disk FAT volume, writes the test ELF, loads and runs it |
@@ -96,6 +98,6 @@ The entry point gets a `void***` with four classes:
 | 0 | Console: `WriteLine16`, `Write16`, `ReadLine16`, `WriteLine/WriteInt32`, `...UInt32`, `...Int64`, `...UInt64`, `...Float`, `...Double`, `Clear`, `SetCursorPosition` |
 | 1 | Heap: `Alloc(uint)`, `Free(void*)` |
 | 2 | File: `Open(path, mode)`, `Close`, `Read`, `Write`, `Seek`, `Tell`, `Flush` |
-| 3 | Misc: `GetArgs(int* argc, char*** argv)` |
+| 3 | Misc: `GetArgs(int* argc, char*** argv)`, `Exit(int code)` |
 
 The C wrappers for all of these live in `CosmosExec/Cosmos.c`, a libc subset (malloc, printf, scanf, fopen, ...) on top of them lives in `CosmosExec/Stellar.c`.
