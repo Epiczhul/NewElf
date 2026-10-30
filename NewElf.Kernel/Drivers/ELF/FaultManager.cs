@@ -13,6 +13,8 @@ namespace NewElf.Drivers.ELF
     /// else go to the original Cosmos gate. The exit call of the function table
     /// uses the same longjmp to leave with an exit code.
     /// Run the ELF on the main kernel thread, longjmp breaks across thread switches.
+    /// The machine code is built from fixed byte templates and verified before
+    /// any gate is touched. If a check fails, isolation stays off.
     /// </summary>
     public static unsafe class FaultManager
     {
@@ -42,6 +44,126 @@ namespace NewElf.Drivers.ELF
 
         private static readonly int StubSize = 128; // one aligned slot per stub
 
+        // ---- machine code templates ----
+        // These bytes are what ends up in executable memory. EnsureInitialized
+        // checks the hole offsets against the opcodes around them before copying.
+
+        // sidt [rcx]; ret
+        private static readonly byte[] SidtThunkBytes = { 0x0F, 0x01, 0x09, 0xC3 };
+
+        // setjmp(rdi = buf): saves the callee saved registers and the return
+        // address. rsp is stored as it will be after the return (entry rsp + 8).
+        private static readonly byte[] SetjmpThunkBytes =
+        {
+            0x48, 0x89, 0x1F,                   // mov [rdi], rbx
+            0x48, 0x89, 0x6F, 0x08,             // mov [rdi+8], rbp
+            0x48, 0x8D, 0x44, 0x24, 0x08,       // lea rax, [rsp+8]
+            0x48, 0x89, 0x47, 0x10,             // mov [rdi+16], rax
+            0x4C, 0x89, 0x67, 0x18,             // mov [rdi+24], r12
+            0x4C, 0x89, 0x6F, 0x20,             // mov [rdi+32], r13
+            0x4C, 0x89, 0x77, 0x28,             // mov [rdi+40], r14
+            0x4C, 0x89, 0x7F, 0x30,             // mov [rdi+48], r15
+            0x48, 0x8B, 0x04, 0x24,             // mov rax, [rsp]
+            0x48, 0x89, 0x47, 0x38,             // mov [rdi+56], rax
+            0x31, 0xC0,                         // xor eax, eax
+            0xC3                                // ret
+        };
+
+        // longjmp(rdi = buf, esi = code): puts the code in eax and restores
+        // what setjmp saved. rbx and rbp go through rax and rcx first because
+        // rdi is still the buffer pointer.
+        private static readonly byte[] LongjmpThunkBytes =
+        {
+            0x48, 0x8B, 0x07,                   // mov rax, [rdi] (saved rbx)
+            0x48, 0x8B, 0x4F, 0x08,             // mov rcx, [rdi+8] (saved rbp)
+            0x48, 0x8B, 0x57, 0x10,             // mov rdx, [rdi+16] (saved rsp)
+            0x4C, 0x8B, 0x67, 0x18,             // mov r12, [rdi+24]
+            0x4C, 0x8B, 0x6F, 0x20,             // mov r13, [rdi+32]
+            0x4C, 0x8B, 0x77, 0x28,             // mov r14, [rdi+40]
+            0x4C, 0x8B, 0x7F, 0x30,             // mov r15, [rdi+48]
+            0x48, 0x8B, 0x7F, 0x38,             // mov rdi, [rdi+56] (target rip)
+            0x48, 0x89, 0xC3,                   // mov rbx, rax
+            0x48, 0x89, 0xCD,                   // mov rbp, rcx
+            0x89, 0xF0,                         // mov eax, esi
+            0x85, 0xF6,                         // test esi, esi
+            0x75, 0x05,                         // jnz restore
+            0xB8, 0x01, 0x00, 0x00, 0x00,       // mov eax, 1
+            // restore:
+            0x48, 0x89, 0xD4,                   // mov rsp, rdx
+            // 3E is the notrack prefix, the landing spot is in the middle of a method
+            0x3E, 0xFF, 0xE7                    // notrack jmp rdi
+        };
+
+        // enter(rdi = calls, rsi = entry, rdx = stackTop): pops the return
+        // address, switches to the ELF stack and jumps
+        private static readonly byte[] EnterThunkBytes =
+        {
+            0x58,                               // pop rax
+            0x48, 0x89, 0xD4,                   // mov rsp, rdx
+            // notrack jmp, the ELF entry has no ENDBR64
+            0x3E, 0xFF, 0xE6                    // notrack jmp rsi
+        };
+
+        // exception stub: pushes every GPR, calls the managed handler with the
+        // frame, then jumps to the original gate (kernel fault) or never comes
+        // back (ELF fault, the handler longjmps). It has three holes: the vector
+        // (imm32), the handler and the original gate (imm64). BeginElf fills
+        // the gate hole on every run.
+        private static readonly byte[] StubTemplatePlain =
+        {
+            0x54,                               // push rsp (faulting RSP, pushed first)
+            0x50, 0x51, 0x52, 0x53,             // push rax, rcx, rdx, rbx
+            0x55, 0x56, 0x57,                   // push rbp, rsi, rdi
+            0x41, 0x50, 0x41, 0x51, 0x41, 0x52, 0x41, 0x53,   // push r8, r9, r10, r11
+            0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,   // push r12, r13, r14, r15
+            0x48, 0x89, 0xE5,                   // mov rbp, rsp (keep the frame)
+            0x48, 0x31, 0xD2,                   // xor rdx, rdx (no CR2 without #PF)
+            0xBE, 0x00, 0x00, 0x00, 0x00,       // mov esi, <vector>
+            0x48, 0x89, 0xE7,                   // mov rdi, rsp (frame pointer)
+            // align the stack for managed code, RDI keeps the frame pointer
+            0x48, 0x83, 0xE4, 0xF0,             // and rsp, -16
+            0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,   // movabs rax, <FaultHandler>
+            0xFF, 0xD0,                         // call rax
+            0x48, 0x89, 0xEC,                   // mov rsp, rbp
+            // add rsp, 128 (drop the pushed GPRs, the CPU frame is on top again)
+            0x48, 0x81, 0xC4, 0x80, 0x00, 0x00, 0x00,
+            0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,   // movabs rax, <original gate>
+            0x3E, 0xFF, 0xE0                    // notrack jmp rax
+        };
+
+        // same stub for #PF, it passes CR2 in RDX as the third argument
+        private static readonly byte[] StubTemplateWithCr2 =
+        {
+            0x54,                               // push rsp (faulting RSP, pushed first)
+            0x50, 0x51, 0x52, 0x53,             // push rax, rcx, rdx, rbx
+            0x55, 0x56, 0x57,                   // push rbp, rsi, rdi
+            0x41, 0x50, 0x41, 0x51, 0x41, 0x52, 0x41, 0x53,   // push r8, r9, r10, r11
+            0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,   // push r12, r13, r14, r15
+            0x48, 0x89, 0xE5,                   // mov rbp, rsp (keep the frame)
+            0x0F, 0x20, 0xD0,                   // mov rax, cr2
+            0x48, 0x89, 0xC2,                   // mov rdx, rax (third handler arg)
+            0xBE, 0x00, 0x00, 0x00, 0x00,       // mov esi, <vector>
+            0x48, 0x89, 0xE7,                   // mov rdi, rsp (frame pointer)
+            0x48, 0x83, 0xE4, 0xF0,             // and rsp, -16
+            0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,   // movabs rax, <FaultHandler>
+            0xFF, 0xD0,                         // call rax
+            0x48, 0x89, 0xEC,                   // mov rsp, rbp
+            0x48, 0x81, 0xC4, 0x80, 0x00, 0x00, 0x00,   // add rsp, 128
+            0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,   // movabs rax, <original gate>
+            0x3E, 0xFF, 0xE0                    // notrack jmp rax
+        };
+
+        // hole offsets inside the templates, checked against the opcodes at init
+        private const int StubPrefixLen = 27;   // pushes plus mov rbp, rsp
+        private const int PlainVariantLen = 3;  // xor rdx, rdx
+        private const int Cr2VariantLen = 6;    // mov rax, cr2 + mov rdx, rax
+        private const int PlainVectorHole = StubPrefixLen + PlainVariantLen + 1;   // imm32 behind the BE
+        private const int Cr2VectorHole = StubPrefixLen + Cr2VariantLen + 1;
+        private const int PlainHandlerHole = PlainVectorHole + 4 + 7 + 2;   // imm64 behind mov rdi and and rsp, movabs is 2 bytes
+        private const int Cr2HandlerHole = Cr2VectorHole + 4 + 7 + 2;
+        private const int PlainGateHole = PlainHandlerHole + 8 + 2 + 3 + 7 + 2;   // imm64 behind call, mov rsp and add rsp
+        private const int Cr2GateHole = Cr2HandlerHole + 8 + 2 + 3 + 7 + 2;
+
         // ---- state of the currently running ELF ----
         private static ulong ElfStart;
         private static ulong ElfEnd;
@@ -50,20 +172,21 @@ namespace NewElf.Drivers.ELF
         private static int ExitCode;
         private static byte* JmpBuf;
 
-        // ---- native bits, hand assembled once and reused ----
+        // ---- native bits, built once from the templates and reused ----
         private static byte* SidtThunk;
         private static byte* SetjmpThunk;
         private static byte* LongjmpThunk;
         private static byte* EnterThunk;
         private static byte* StubMemory;
         private static bool Initialized;
+        private static bool BlobsValid;
 
         // gates we patched: (vector, gate address, original offset qword)
         private static readonly List<(byte Vector, nint Gate, ulong Original)> Patched = new();
 
-        // where the original gate offset sits inside each stub: right at the
-        // movabs before the final jmp, so its position depends on whether the
-        // stub loads CR2 for that vector
+        // where the vector, handler and gate values sit inside each built stub
+        private static readonly int[] StubVectorHole = new int[GuardedVectors.Length];
+        private static readonly int[] StubHandlerHole = new int[GuardedVectors.Length];
         private static readonly int[] StubOrigOffset = new int[GuardedVectors.Length];
 
         /// <summary>
@@ -73,6 +196,12 @@ namespace NewElf.Drivers.ELF
         public static void BeginElf(ulong start, ulong end)
         {
             EnsureInitialized();
+
+            if (!BlobsValid)
+            {
+                Console.WriteLine("FaultManager: machine code blobs failed verification, fault isolation is off.");
+                return;
+            }
 
             ElfStart = start;
             ElfEnd = end;
@@ -158,7 +287,8 @@ namespace NewElf.Drivers.ELF
 
         /// <summary>
         /// Leaves the running ELF with an exit code. Called from the exit
-        /// entry of the function table and from the fault handler.
+        /// entry of the function table and from the fault handler. Without a
+        /// pending run it only records the code and returns.
         /// </summary>
         public static void RequestExit(int code)
         {
@@ -230,85 +360,49 @@ namespace NewElf.Drivers.ELF
         // the jump restores every callee saved register from the buffer.
 
         /// <summary>
-        /// Builds the small machine code blobs once: the sidt thunk, the
-        /// setjmp/longjmp pair, the stack switching enter thunk and one
-        /// exception stub per guarded vector.
+        /// Builds the machine code from the templates and verifies it: hole
+        /// offsets, copies and the written values are all read back. On any
+        /// mismatch <see cref="BlobsValid"/> stays false.
         /// </summary>
         private static void EnsureInitialized()
         {
             if (Initialized)
                 return;
 
-            // sidt [rcx]; ret
-            SidtThunk = (byte*)NativeMemory.Alloc(8);
-            SidtThunk[0] = 0x0F;
-            SidtThunk[1] = 0x01;
-            SidtThunk[2] = 0x09;
-            SidtThunk[3] = 0xC3;
+            Initialized = true;
+            bool ok = true;
 
-            // setjmp: stow the callee saved registers and the return address.
-            // rsp goes in as it will be after setjmp returns (entry rsp + 8,
-            // same trick glibc uses), so the jump back lands with the stack
-            // exactly where the caller expects it.
-            // setjmp(rdi = buf)
-            SetjmpThunk = (byte*)NativeMemory.Alloc(48);
-            byte* s = SetjmpThunk;
-            int i = 0;
-            s[i] = 0x48; s[i + 1] = 0x89; s[i + 2] = 0x1F; i += 3;          // mov [rdi], rbx
-            s[i] = 0x48; s[i + 1] = 0x89; s[i + 2] = 0x6F; s[i + 3] = 0x08; i += 4;   // mov [rdi+8], rbp
-            s[i] = 0x48; s[i + 1] = 0x8D; s[i + 2] = 0x44; s[i + 3] = 0x24; s[i + 4] = 0x08; i += 5;   // lea rax, [rsp+8]
-            s[i] = 0x48; s[i + 1] = 0x89; s[i + 2] = 0x47; s[i + 3] = 0x10; i += 4;   // mov [rdi+16], rax
-            s[i] = 0x4C; s[i + 1] = 0x89; s[i + 2] = 0x67; s[i + 3] = 0x18; i += 4;   // mov [rdi+24], r12
-            s[i] = 0x4C; s[i + 1] = 0x89; s[i + 2] = 0x6F; s[i + 3] = 0x20; i += 4;   // mov [rdi+32], r13
-            s[i] = 0x4C; s[i + 1] = 0x89; s[i + 2] = 0x77; s[i + 3] = 0x28; i += 4;   // mov [rdi+40], r14
-            s[i] = 0x4C; s[i + 1] = 0x89; s[i + 2] = 0x7F; s[i + 3] = 0x30; i += 4;   // mov [rdi+48], r15
-            s[i] = 0x48; s[i + 1] = 0x8B; s[i + 2] = 0x04; s[i + 3] = 0x24; i += 4;   // mov rax, [rsp]
-            s[i] = 0x48; s[i + 1] = 0x89; s[i + 2] = 0x47; s[i + 3] = 0x38; i += 4;   // mov [rdi+56], rax
-            s[i] = 0x31; s[i + 1] = 0xC0; i += 2;                            // xor eax, eax
-            s[i] = 0xC3;                                                     // ret
+            // check the templates first
+            ok &= TemplateMarkersOk(StubTemplatePlain, PlainVectorHole, PlainHandlerHole, PlainGateHole);
+            ok &= TemplateMarkersOk(StubTemplateWithCr2, Cr2VectorHole, Cr2HandlerHole, Cr2GateHole);
 
-            // longjmp: put the code in eax, restore what setjmp saved.
-            // rbx and rbp ride through rax and rcx: load them into scratch
-            // first, copy them into place after rdi gave up the buffer.
-            // longjmp(rdi = buf, esi = code)
-            LongjmpThunk = (byte*)NativeMemory.Alloc(64);
-            byte* l = LongjmpThunk;
-            i = 0;
-            l[i] = 0x48; l[i + 1] = 0x8B; l[i + 2] = 0x07; i += 3;          // mov rax, [rdi] (saved rbx)
-            l[i] = 0x48; l[i + 1] = 0x8B; l[i + 2] = 0x4F; l[i + 3] = 0x08; i += 4;   // mov rcx, [rdi+8] (saved rbp)
-            l[i] = 0x48; l[i + 1] = 0x8B; l[i + 2] = 0x57; l[i + 3] = 0x10; i += 4;   // mov rdx, [rdi+16] (saved rsp)
-            l[i] = 0x4C; l[i + 1] = 0x8B; l[i + 2] = 0x67; l[i + 3] = 0x18; i += 4;   // mov r12, [rdi+24]
-            l[i] = 0x4C; l[i + 1] = 0x8B; l[i + 2] = 0x6F; l[i + 3] = 0x20; i += 4;   // mov r13, [rdi+32]
-            l[i] = 0x4C; l[i + 1] = 0x8B; l[i + 2] = 0x77; l[i + 3] = 0x28; i += 4;   // mov r14, [rdi+40]
-            l[i] = 0x4C; l[i + 1] = 0x8B; l[i + 2] = 0x7F; l[i + 3] = 0x30; i += 4;   // mov r15, [rdi+48]
-            l[i] = 0x48; l[i + 1] = 0x8B; l[i + 2] = 0x7F; l[i + 3] = 0x38; i += 4;   // mov rdi, [rdi+56] (target rip)
-            l[i] = 0x48; l[i + 1] = 0x89; l[i + 2] = 0xC3; i += 3;          // mov rbx, rax
-            l[i] = 0x48; l[i + 1] = 0x89; l[i + 2] = 0xCD; i += 3;          // mov rbp, rcx
-            l[i] = 0x89; l[i + 1] = 0xF0; i += 2;                            // mov eax, esi
-            l[i] = 0x85; l[i + 1] = 0xF6; i += 2;                            // test esi, esi
-            l[i] = 0x75; l[i + 1] = 0x05; i += 2;                            // jnz restore
-            l[i] = 0xB8; l[i + 1] = 0x01; l[i + 2] = 0x00; l[i + 3] = 0x00; l[i + 4] = 0x00; i += 5;   // mov eax, 1
-            // restore:
-            l[i] = 0x48; l[i + 1] = 0x89; l[i + 2] = 0xD4; i += 3;           // mov rsp, rdx
-            // 3E is the notrack prefix: the landing spot is mid method, so
-            // where IBT is enforced (a running .NET host for one) the plain
-            // indirect jmp would fault. glibc does the same in longjmp.
-            l[i] = 0x3E; l[i + 1] = 0xFF; l[i + 2] = 0xE7; i += 3;           // notrack jmp rdi
-
-            // enter: pop the return address, switch to the ELF stack, jump
-            // enter(rdi = calls, rsi = entry, rdx = stackTop)
-            EnterThunk = (byte*)NativeMemory.Alloc(16);
-            EnterThunk[0] = 0x58;                              // pop rax
-            EnterThunk[1] = 0x48; EnterThunk[2] = 0x89; EnterThunk[3] = 0xD4;   // mov rsp, rdx
-            // notrack jmp: the ELF entry has no ENDBR64 for IBT to like
-            EnterThunk[4] = 0x3E; EnterThunk[5] = 0xFF; EnterThunk[6] = 0xE6;   // notrack jmp rsi
+            // the fixed thunks are plain copies
+            SidtThunk = CopyBlob(SidtThunkBytes, 8);
+            SetjmpThunk = CopyBlob(SetjmpThunkBytes, 48);
+            LongjmpThunk = CopyBlob(LongjmpThunkBytes, 64);
+            EnterThunk = CopyBlob(EnterThunkBytes, 16);
+            ok &= BlobMatches(SidtThunk, SidtThunkBytes);
+            ok &= BlobMatches(SetjmpThunk, SetjmpThunkBytes);
+            ok &= BlobMatches(LongjmpThunk, LongjmpThunkBytes);
+            ok &= BlobMatches(EnterThunk, EnterThunkBytes);
 
             // one exception stub per guarded vector
             StubMemory = (byte*)NativeMemory.Alloc((nuint)(GuardedVectors.Length * StubSize));
-            for (int v = 0; v < GuardedVectors.Length; v++)
-                BuildStub(StubMemory + v * StubSize, GuardedVectors[v].Vector);
+            for (int v = 0; v < GuardedVectors.Length && ok; v++)
+            {
+                byte vector = GuardedVectors[v].Vector;
+                BuildStub(StubMemory + v * StubSize, vector);
+                ok &= StubSlotOk(StubMemory + v * StubSize, v, vector);
+            }
 
-            Initialized = true;
+            if (!ok)
+            {
+                Console.WriteLine("FaultManager: machine code verification failed, keeping the original exception gates.");
+                BlobsValid = false;
+                return;
+            }
+
+            BlobsValid = true;
         }
 
         private static int StubIndex(byte vector)
@@ -323,61 +417,71 @@ namespace NewElf.Drivers.ELF
         }
 
         /// <summary>
-        /// Writes one exception stub: stash every GPR, call the managed
-        /// handler with the frame, then either return to the original gate
-        /// (kernel fault) or never come back (ELF fault, handler longjmps).
-        /// The original gate offset is patched in per run by BeginElf, it
-        /// lives in the last movabs before the jmp.
+        /// Copies one stub template into its slot, writes the vector and the
+        /// handler in and records where the gate hole is. The gate stays zero
+        /// until BeginElf fills it.
         /// </summary>
         private static void BuildStub(byte* p, byte vector)
         {
-            int i = 0;
+            bool withCr2 = vector == 14;
+            byte[] template = withCr2 ? StubTemplateWithCr2 : StubTemplatePlain;
+            int index = StubIndex(vector);
 
-            p[i++] = 0x54;                                     // push rsp (faulting RSP, pushed first)
-            p[i++] = 0x50; p[i++] = 0x51; p[i++] = 0x52; p[i++] = 0x53;   // push rax, rcx, rdx, rbx
-            p[i++] = 0x55; p[i++] = 0x56; p[i++] = 0x57;                  // push rbp, rsi, rdi
-            for (byte r = 0; r < 8; r++)
+            for (int i = 0; i < template.Length; i++)
+                p[i] = template[i];
+
+            *(int*)(p + (withCr2 ? Cr2VectorHole : PlainVectorHole)) = vector;
+            *(ulong*)(p + (withCr2 ? Cr2HandlerHole : PlainHandlerHole)) =
+                (ulong)(delegate* unmanaged[Cdecl]<void*, int, ulong, void>)&FaultHandler;
+
+            StubVectorHole[index] = withCr2 ? Cr2VectorHole : PlainVectorHole;
+            StubHandlerHole[index] = withCr2 ? Cr2HandlerHole : PlainHandlerHole;
+            StubOrigOffset[index] = withCr2 ? Cr2GateHole : PlainGateHole;
+        }
+
+        // checks that the holes sit behind the right opcodes and the template fits
+        private static bool TemplateMarkersOk(byte[] t, int vectorHole, int handlerHole, int gateHole)
+        {
+            return t.Length <= StubSize
+                && t[vectorHole - 1] == 0xBE
+                && t[handlerHole - 2] == 0x48 && t[handlerHole - 1] == 0xB8
+                && t[handlerHole + 8] == 0xFF && t[handlerHole + 9] == 0xD0
+                && t[gateHole - 2] == 0x48 && t[gateHole - 1] == 0xB8
+                && t[gateHole + 8] == 0x3E && t[gateHole + 9] == 0xFF && t[gateHole + 10] == 0xE0;
+        }
+
+        // checks a built stub slot by reading the values and opcodes back
+        private static bool StubSlotOk(byte* p, int index, byte vector)
+        {
+            return p[StubVectorHole[index] - 1] == 0xBE
+                && *(int*)(p + StubVectorHole[index]) == vector
+                && p[StubHandlerHole[index] - 2] == 0x48 && p[StubHandlerHole[index] - 1] == 0xB8
+                && *(ulong*)(p + StubHandlerHole[index]) ==
+                    (ulong)(delegate* unmanaged[Cdecl]<void*, int, ulong, void>)&FaultHandler
+                && p[StubHandlerHole[index] + 8] == 0xFF && p[StubHandlerHole[index] + 9] == 0xD0
+                && p[StubOrigOffset[index] - 2] == 0x48 && p[StubOrigOffset[index] - 1] == 0xB8
+                && p[StubOrigOffset[index] + 8] == 0x3E && p[StubOrigOffset[index] + 9] == 0xFF
+                && p[StubOrigOffset[index] + 10] == 0xE0;
+        }
+
+        private static byte* CopyBlob(byte[] golden, nuint size)
+        {
+            byte* p = (byte*)NativeMemory.Alloc(size);
+            for (int i = 0; i < golden.Length; i++)
+                p[i] = golden[i];
+
+            return p;
+        }
+
+        private static bool BlobMatches(byte* p, byte[] golden)
+        {
+            for (int i = 0; i < golden.Length; i++)
             {
-                p[i++] = 0x41; p[i++] = (byte)(0x50 + r);      // push r8 .. r15
+                if (p[i] != golden[i])
+                    return false;
             }
 
-            p[i] = 0x48; p[i + 1] = 0x89; p[i + 2] = 0xE5; i += 3;   // mov rbp, rsp (keep the frame)
-
-            if (vector == 14)
-            {
-                p[i] = 0x0F; p[i + 1] = 0x20; p[i + 2] = 0xD0; i += 3;   // mov rax, cr2
-                p[i] = 0x48; p[i + 1] = 0x89; p[i + 2] = 0xC2; i += 3;   // mov rdx, rax (third handler arg)
-            }
-            else
-            {
-                p[i] = 0x48; p[i + 1] = 0x31; p[i + 2] = 0xD2; i += 3;   // xor rdx, rdx
-            }
-
-            p[i++] = 0xBE;                                     // mov esi, vector
-            *(int*)(p + i) = vector;
-            i += 4;
-
-            p[i] = 0x48; p[i + 1] = 0x89; p[i + 2] = 0xE7; i += 3;   // mov rdi, rsp (frame pointer)
-            // managed code assumes a 16 byte aligned stack and the pushes
-            // left RSP arbitrary, so straighten it out for the call. RDI
-            // keeps the unaligned frame pointer for the frame offsets.
-            p[i] = 0x48; p[i + 1] = 0x83; p[i + 2] = 0xE4; p[i + 3] = 0xF0; i += 4;   // and rsp, -16
-
-            p[i] = 0x48; p[i + 1] = 0xB8; i += 2;              // movabs rax, FaultHandler
-            *(ulong*)(p + i) = (ulong)(delegate* unmanaged[Cdecl]<void*, int, ulong, void>)&FaultHandler;
-            i += 8;
-
-            p[i] = 0xFF; p[i + 1] = 0xD0; i += 2;              // call rax
-
-            p[i] = 0x48; p[i + 1] = 0x89; p[i + 2] = 0xEC; i += 3;   // mov rsp, rbp
-            // add rsp, 128 (drop the pushed GPRs, the CPU frame is on top again)
-            p[i] = 0x48; p[i + 1] = 0x81; p[i + 2] = 0xC4; p[i + 3] = 0x80; p[i + 4] = 0x00; p[i + 5] = 0x00; p[i + 6] = 0x00; i += 7;
-
-            p[i] = 0x48; p[i + 1] = 0xB8; i += 2;              // movabs rax, original gate
-            StubOrigOffset[StubIndex(vector)] = i;             // imm64 patched by BeginElf
-            i += 8;
-
-            p[i] = 0x3E; p[i + 1] = 0xFF; p[i + 2] = 0xE0; i += 3;   // notrack jmp rax
+            return true;
         }
 
         // 16 byte IDT gate in long mode: offset low, selector, ist, type,
