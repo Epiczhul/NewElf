@@ -215,8 +215,17 @@ namespace NewElf.ELF
 
         /// <summary>
         /// Exit code of the last run, or 128 + vector if a fault killed the ELF.
+        /// <see cref="RunnerErrorExitCode"/> means the loader refused or failed
+        /// before the ELF could set a code.
         /// </summary>
         public int ExitCode { get; private set; } = -1;
+
+        // thread of the first run, fault unwinding and the GC pause only
+        // work on that one
+        private static int KernelThreadId = -1;
+
+        // exit code when the loader refuses or fails before the ELF can set one
+        private const int RunnerErrorExitCode = 125;
 
         // SysV auxiliary vector tags
         private const ulong AT_NULL = 0;
@@ -479,6 +488,19 @@ namespace NewElf.ELF
             if (LoadBase == IntPtr.Zero)
                 throw new ElfException("ELF not loaded");
 
+            // stay on the thread of the first run, see KernelThreadId
+            int threadId = Environment.CurrentManagedThreadId;
+            if (KernelThreadId == -1)
+            {
+                KernelThreadId = threadId;
+            }
+            else if (threadId != KernelThreadId)
+            {
+                Console.WriteLine("NewElf: refusing to run the ELF on thread " + threadId + ", it first ran on kernel thread " + KernelThreadId + ". Fault unwinding and the GC pause only work on that thread.");
+                ExitCode = RunnerErrorExitCode;
+                return;
+            }
+
             byte* entryPoint = (byte*)LoadBase + EntryPointOffset;
 
             // Build the Cosmos function table. The ELF gets it in RDI (the
@@ -492,6 +514,7 @@ namespace NewElf.ELF
             // references held by the frozen kernel frames, so pause it.
             // The 64 MiB budget has to cover everything the ELF allocates.
             bool noGc = GC.TryStartNoGCRegion(64 * 1024 * 1024);
+
             if (!noGc)
                 Console.WriteLine("NewElf: warning, could not pause the GC for the ELF run.");
 
@@ -503,6 +526,7 @@ namespace NewElf.ELF
             catch (Exception ex)
             {
                 Console.WriteLine($"Error executing ELF: {ex.Message}");
+                ExitCode = RunnerErrorExitCode;
             }
             finally
             {
