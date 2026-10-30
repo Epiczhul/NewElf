@@ -192,9 +192,13 @@ namespace NewElf.Drivers.ELF
         /// <summary>
         /// Marks an ELF as running and points the guarded exception gates at
         /// the ELF checking stubs. Must be paired with <see cref="EndElf"/>.
+        /// If the blobs did not verify or no gate can be patched, the original
+        /// gates stay and the ELF runs without fault isolation.
         /// </summary>
         public static void BeginElf(ulong start, ulong end)
         {
+            // undo patches left over from a run that never reached EndElf
+            EndElf();
             EnsureInitialized();
 
             if (!BlobsValid)
@@ -206,7 +210,6 @@ namespace NewElf.Drivers.ELF
             ElfStart = start;
             ElfEnd = end;
             ElfActive = true;
-            Patched.Clear();
 
             // read the live IDT with sidt
             IdtRegister idtr = default;
@@ -215,6 +218,7 @@ namespace NewElf.Drivers.ELF
             if (idtr.Base == 0 || idtr.Limit < 255 * 16)
             {
                 Console.WriteLine("FaultManager: no live IDT found, fault isolation is off.");
+                ElfActive = false;
                 return;
             }
 
@@ -223,9 +227,9 @@ namespace NewElf.Drivers.ELF
                 var guarded = GuardedVectors[i];
                 byte* gate = (byte*)idtr.Base + guarded.Vector * 16;
 
-                // only patch present gates: those are the ones we can chain
-                // back into, a missing gate would turn every fault fatal again
-                if ((gate[5] & 0x80) == 0)
+                // only patch present 64 bit interrupt gates, the others
+                // cannot be chained back into
+                if ((gate[5] & 0x80) == 0 || (gate[5] & 0x0F) != 0x0E)
                     continue;
 
                 byte* stub = StubMemory + i * StubSize;
@@ -235,23 +239,52 @@ namespace NewElf.Drivers.ELF
                 ulong original = ReadGateOffset(gate);
                 *(ulong*)(stub + StubOrigOffset[i]) = original;
 
-                Patched.Add((guarded.Vector, (nint)gate, original));
+                // read the gate back, undo everything if the write did not stick
                 WriteGateOffset(gate, (ulong)stub);
+                if (ReadGateOffset(gate) != (ulong)stub)
+                {
+                    Console.WriteLine("FaultManager: gate write for vector " + guarded.Vector + " did not stick, fault isolation is off.");
+                    UndoPatches();
+                    ElfActive = false;
+                    return;
+                }
+
+                Patched.Add((guarded.Vector, (nint)gate, original));
+            }
+
+            if (Patched.Count == 0)
+            {
+                Console.WriteLine("FaultManager: found no patchable exception gates, fault isolation is off for this run.");
+                ElfActive = false;
             }
         }
 
         /// <summary>
         /// Restores the original exception gates and forgets the ELF range.
+        /// Safe to call twice, it undoes nothing when nothing is patched.
         /// </summary>
         public static void EndElf()
         {
-            foreach (var patched in Patched)
-                WriteGateOffset((byte*)patched.Gate, patched.Original);
-
-            Patched.Clear();
+            UndoPatches();
             ElfActive = false;
             ElfStart = 0;
             ElfEnd = 0;
+            InHandler = false;
+        }
+
+        // puts every patched gate back
+        private static void UndoPatches()
+        {
+            foreach (var patched in Patched)
+            {
+                WriteGateOffset((byte*)patched.Gate, patched.Original);
+
+                // the stub memory gets reused, a gate still pointing there would break
+                if (ReadGateOffset((byte*)patched.Gate) != patched.Original)
+                    Console.WriteLine("FaultManager: failed to restore the vector " + patched.Vector + " gate.");
+            }
+
+            Patched.Clear();
         }
 
         /// <summary>
@@ -311,6 +344,10 @@ namespace NewElf.Drivers.ELF
             // a fault while writing the report would recurse, bail out and
             // let the original gate handle whatever is going on
             if (InHandler || !ElfActive || JmpBuf == null)
+                return;
+
+            // only the guarded vectors come through the stubs
+            if (vector != 6 && vector != 13 && vector != 14)
                 return;
 
             bool hasError = vector == 13 || vector == 14;
