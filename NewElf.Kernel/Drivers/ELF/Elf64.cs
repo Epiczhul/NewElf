@@ -224,6 +224,9 @@ namespace NewElf.ELF
         // work on that one
         private static int KernelThreadId = -1;
 
+        // MiB budgets for the GC pause, tried in order until the heap accepts one
+        private static readonly int[] NoGcBudgets = { 64, 16, 4 };
+
         // exit code when the loader refuses or fails before the ELF can set one
         private const int RunnerErrorExitCode = 125;
 
@@ -512,8 +515,24 @@ namespace NewElf.ELF
 
             // A GC during the run would walk the ELF stack and miss the
             // references held by the frozen kernel frames, so pause it.
-            // The 64 MiB budget has to cover everything the ELF allocates.
-            bool noGc = GC.TryStartNoGCRegion(64 * 1024 * 1024);
+            // TryStartNoGCRegion can fail on a small heap, so try the next
+            // budget and carry on without the pause if none works.
+            bool noGc = false;
+            foreach (int budget in NoGcBudgets)
+            {
+                try
+                {
+                    if (GC.TryStartNoGCRegion((long)budget * 1024 * 1024))
+                    {
+                        noGc = true;
+                        break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("NewElf: GC pause of " + budget + " MiB failed: " + ex.Message);
+                }
+            }
 
             if (!noGc)
                 Console.WriteLine("NewElf: warning, could not pause the GC for the ELF run.");
