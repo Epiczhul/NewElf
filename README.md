@@ -1,6 +1,4 @@
 # NewElf
-THIS IS A HARD-FORK OF:
-https://github.com/Guillermo-Santos/StarElf
 
 ## Overview
 
@@ -101,3 +99,8 @@ The entry point gets a `void***` with four classes:
 | 3 | Misc: `GetArgs(int* argc, char*** argv)`, `Exit(int code)` |
 
 The C wrappers for all of these live in `CosmosExec/Cosmos.c`, a libc subset (malloc, printf, scanf, fopen, ...) on top of them lives in `CosmosExec/Stellar.c`.
+
+
+
+Originialy based on (now heavly modified):
+https://github.com/Guillermo-Santos/StarElf
