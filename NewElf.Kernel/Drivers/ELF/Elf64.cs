@@ -220,12 +220,14 @@ namespace NewElf.ELF
         /// </summary>
         public int ExitCode { get; private set; } = -1;
 
-        // thread of the first run, fault unwinding and the GC pause only
-        // work on that one
+        // thread of the first run, fault unwinding only works on that one
         private static int KernelThreadId = -1;
 
-        // MiB budgets for the GC pause, tried in order until the heap accepts one
-        private static readonly int[] NoGcBudgets = { 64, 16, 4 };
+        // The runtime has no NoGCRegion support, so the GC cannot be paused
+        // during a run. A GC from a table call only walks the ELF stack and
+        // would miss the loader in the frozen kernel frames. Holding it in
+        // this static for the run keeps it alive.
+        private static Elf64? KeepAlive;
 
         // exit code when the loader refuses or fails before the ELF can set one
         private const int RunnerErrorExitCode = 125;
@@ -499,7 +501,7 @@ namespace NewElf.ELF
             }
             else if (threadId != KernelThreadId)
             {
-                Console.WriteLine("NewElf: refusing to run the ELF on thread " + threadId + ", it first ran on kernel thread " + KernelThreadId + ". Fault unwinding and the GC pause only work on that thread.");
+                Console.WriteLine("NewElf: refusing to run the ELF on thread " + threadId + ", it first ran on kernel thread " + KernelThreadId + ". Fault unwinding only works on that thread.");
                 ExitCode = RunnerErrorExitCode;
                 return;
             }
@@ -513,29 +515,10 @@ namespace NewElf.ELF
 
             byte* stackTop = BuildStartupStack();
 
-            // A GC during the run would walk the ELF stack and miss the
-            // references held by the frozen kernel frames, so pause it.
-            // TryStartNoGCRegion can fail on a small heap, so try the next
-            // budget and carry on without the pause if none works.
-            bool noGc = false;
-            foreach (int budget in NoGcBudgets)
-            {
-                try
-                {
-                    if (GC.TryStartNoGCRegion((long)budget * 1024 * 1024))
-                    {
-                        noGc = true;
-                        break;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine("NewElf: GC pause of " + budget + " MiB failed: " + ex.Message);
-                }
-            }
-
-            if (!noGc)
-                Console.WriteLine("NewElf: warning, could not pause the GC for the ELF run.");
+            // The GC cannot be paused, see KeepAlive. Collect first so the run
+            // starts with as much free heap as possible.
+            KeepAlive = this;
+            GC.Collect();
 
             try
             {
@@ -557,12 +540,7 @@ namespace NewElf.ELF
                     StackBlock = IntPtr.Zero;
                 }
 
-                if (noGc)
-                {
-                    // the region can end on its own when the budget runs out
-                    try { GC.EndNoGCRegion(); }
-                    catch (InvalidOperationException) { }
-                }
+                KeepAlive = null;
             }
         }
 
