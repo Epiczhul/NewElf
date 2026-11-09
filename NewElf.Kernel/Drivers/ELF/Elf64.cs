@@ -210,6 +210,9 @@ namespace NewElf.ELF
         private ulong MinVaddr = ulong.MaxValue; // lowest p_vaddr of all PT_LOAD segments
         private ulong MaxVaddr = 0;              // highest p_vaddr + p_memsz
 
+        // native copy of the ELF file, the managed array can be moved by the GC
+        private IntPtr NativeFileBlock = IntPtr.Zero;
+
         // stack block for the ELF, freed after the run
         private IntPtr StackBlock = IntPtr.Zero;
 
@@ -269,9 +272,10 @@ namespace NewElf.ELF
         private void LoadElfFile(byte[] bytes)
         {
             FileBytes = bytes;
+
+            // the pointer is not kept, later reads use the native copy
             fixed (byte* start = bytes)
             {
-                FileStart = start;
                 Header = Elf64_Ehdr.FromPointer(start);
 
                 // Verify ELF magic
@@ -307,6 +311,9 @@ namespace NewElf.ELF
             // First pass: calculate total memory needed
             CalculateMemoryRequirements();
 
+            // native copy of the file, see NativeFileBlock
+            RefreshNativeFile();
+
             // Allocate memory in one contiguous block
             LoadBase = (IntPtr)NativeMemory.Alloc((nuint)TotalMemSize);
             if (LoadBase == IntPtr.Zero)
@@ -320,6 +327,25 @@ namespace NewElf.ELF
 
             // Execute the entry point
             ExecuteEntryPoint();
+        }
+
+        /// <summary>
+        /// Copies the file bytes into a native buffer the GC cannot move and
+        /// points FileStart at it.
+        /// </summary>
+        private void RefreshNativeFile()
+        {
+            if (NativeFileBlock != IntPtr.Zero)
+                NativeMemory.Free((void*)NativeFileBlock);
+
+            NativeFileBlock = (IntPtr)NativeMemory.Alloc((nuint)FileBytes.Length);
+            if (NativeFileBlock == IntPtr.Zero)
+                throw new ElfException("Failed to allocate the native copy of the ELF file");
+
+            fixed (byte* src = FileBytes)
+                Buffer.MemoryCopy(src, (void*)NativeFileBlock, FileBytes.Length, FileBytes.Length);
+
+            FileStart = (byte*)NativeFileBlock;
         }
 
         private void CalculateMemoryRequirements()
@@ -697,6 +723,15 @@ namespace NewElf.ELF
                 NativeMemory.Free((void*)LoadBase);
                 LoadBase = IntPtr.Zero;
             }
+
+            if (NativeFileBlock != IntPtr.Zero)
+            {
+                NativeMemory.Free((void*)NativeFileBlock);
+                NativeFileBlock = IntPtr.Zero;
+            }
+
+            // the next run makes a fresh native copy
+            FileStart = null;
         }
 
         public void PrintElfInfo()
