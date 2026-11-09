@@ -319,31 +319,41 @@ namespace NewElf.ELF
 
         public void LoadAndExecuteElf()
         {
-            if (LoadBase != IntPtr.Zero)
-                FreeElf(); // Clean up previous allocation if any
+            // any failure ends up as exit code 125 instead of an exception in the kernel
+            try
+            {
+                if (LoadBase != IntPtr.Zero)
+                    FreeElf(); // Clean up previous allocation if any
 
-            // refuse what cannot run before touching any memory
-            ValidateLoadable();
+                // refuse what cannot run before touching any memory
+                ValidateLoadable();
 
-            // First pass: calculate total memory needed
-            CalculateMemoryRequirements();
+                // First pass: calculate total memory needed
+                CalculateMemoryRequirements();
 
-            // native copy of the file, see NativeFileBlock
-            RefreshNativeFile();
+                // native copy of the file, see NativeFileBlock
+                RefreshNativeFile();
 
-            // Allocate memory in one contiguous block
-            LoadBase = (IntPtr)NativeMemory.Alloc((nuint)TotalMemSize);
-            if (LoadBase == IntPtr.Zero)
-                throw new ElfException("Failed to allocate memory for ELF");
+                // Allocate memory in one contiguous block
+                LoadBase = (IntPtr)NativeMemory.Alloc((nuint)TotalMemSize);
+                if (LoadBase == IntPtr.Zero)
+                    throw new ElfException("Failed to allocate memory for ELF");
 
-            // Second pass: load segments into memory sequentially
-            LoadSegments();
+                // Second pass: load segments into memory sequentially
+                LoadSegments();
 
-            // Apply the relocations a static-PIE build carries
-            ApplyRelocations();
+                // Apply the relocations a static-PIE build carries
+                ApplyRelocations();
 
-            // Execute the entry point
-            ExecuteEntryPoint();
+                // Execute the entry point
+                ExecuteEntryPoint();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("NewElf: cannot run this ELF, " + ex.Message);
+                ExitCode = RunnerErrorExitCode;
+                FreeElf();
+            }
         }
 
         /// <summary>
