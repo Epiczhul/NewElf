@@ -186,7 +186,8 @@ namespace NewElf.ELF
     /// applies the relocations of a static PIE build and enters the entry
     /// point with the function table in RDI and a SysV process start block on
     /// its stack. The run ends through the exit call or a caught CPU fault.
-    /// The ELF has to be x86-64 and linked with 'gcc -static-pie'.
+    /// The ELF has to be x86-64 and linked with 'gcc -static-pie'. Dynamically
+    /// linked ELFs are refused, and LoadAndExecuteElf never throws into the kernel.
     /// </summary>
     public unsafe class Elf64
     {
@@ -210,11 +211,14 @@ namespace NewElf.ELF
         private ulong MinVaddr = ulong.MaxValue; // lowest p_vaddr of all PT_LOAD segments
         private ulong MaxVaddr = 0;              // highest p_vaddr + p_memsz
 
+        // stack block for the ELF, freed after the run
+        private IntPtr StackBlock = IntPtr.Zero;
+
         // native copy of the ELF file, the managed array can be moved by the GC
         private IntPtr NativeFileBlock = IntPtr.Zero;
 
-        // stack block for the ELF, freed after the run
-        private IntPtr StackBlock = IntPtr.Zero;
+        // true when the entry point was found inside a loaded segment
+        private bool EntryPointFound;
 
         /// <summary>
         /// Exit code of the last run, or 128 + vector if a fault killed the ELF.
@@ -273,6 +277,9 @@ namespace NewElf.ELF
         {
             FileBytes = bytes;
 
+            if (bytes.Length < 64)
+                throw new ElfException("File is too small to hold an ELF64 header");
+
             // the pointer is not kept, later reads use the native copy
             fixed (byte* start = bytes)
             {
@@ -292,6 +299,13 @@ namespace NewElf.ELF
                 if ((ElfInstructionSet)Header.Machine != ElfInstructionSet.X86_64)
                     throw new ElfException("ELF is not for x86-64.");
 
+                if (Header.PhEntSize < 56)
+                    throw new ElfException($"Program header entry size {Header.PhEntSize} is too small for an ELF64 table");
+
+                if (Header.PhOff >= (ulong)bytes.Length ||
+                    Header.PhOff + (ulong)Header.PhNum * Header.PhEntSize > (ulong)bytes.Length)
+                    throw new ElfException("The program header table lies outside of the file");
+
                 // Load program headers
                 ProgramHeaders.Clear();
                 for (int i = 0; i < Header.PhNum; i++)
@@ -307,6 +321,9 @@ namespace NewElf.ELF
         {
             if (LoadBase != IntPtr.Zero)
                 FreeElf(); // Clean up previous allocation if any
+
+            // refuse what cannot run before touching any memory
+            ValidateLoadable();
 
             // First pass: calculate total memory needed
             CalculateMemoryRequirements();
@@ -348,7 +365,81 @@ namespace NewElf.ELF
             FileStart = (byte*)NativeFileBlock;
         }
 
-        private void CalculateMemoryRequirements()
+        /// <summary>
+        /// Collects the reasons why this ELF cannot run here. Used for the
+        /// refusal before a run and for the warnings in PrintElfInfo.
+        /// </summary>
+        private List<string> FindLoadBlockers()
+        {
+            List<string> blockers = new List<string>();
+
+            if (Header.Type != 2 && Header.Type != 3) // ET_EXEC, ET_DYN
+                blockers.Add($"ELF type {Header.Type} is neither ET_EXEC nor ET_DYN.");
+
+            bool hasLoad = false;
+            foreach (var phdr in ProgramHeaders)
+            {
+                if (phdr.Type == (uint)ElfSegmentType.Load)
+                {
+                    hasLoad = true;
+                    if (phdr.Offset > (ulong)FileBytes.Length ||
+                        phdr.FileSize > (ulong)FileBytes.Length - phdr.Offset)
+                        blockers.Add($"The PT_LOAD segment at file offset 0x{phdr.Offset:X} reads past the end of the file, the ELF is corrupt.");
+                }
+
+                if (phdr.Type == (uint)ElfSegmentType.Interp)
+                    blockers.Add("PT_INTERP present: the ELF is dynamically linked and wants the Linux loader ld.so. Rebuild with 'gcc -static-pie'.");
+            }
+
+            if (!hasLoad)
+                blockers.Add("The ELF has no PT_LOAD segments, there is nothing to load.");
+
+            foreach (var phdr in ProgramHeaders)
+            {
+                if (phdr.Type != (uint)ElfSegmentType.Dynamic)
+                    continue;
+
+                if (phdr.Offset > (ulong)FileBytes.Length ||
+                    phdr.FileSize > (ulong)FileBytes.Length - phdr.Offset)
+                {
+                    blockers.Add("The PT_DYNAMIC segment reads past the end of the file, the ELF is corrupt.");
+                    continue;
+                }
+
+                fixed (byte* start = FileBytes)
+                {
+                    ulong dynCount = phdr.FileSize / 16; // each Elf64_Dyn entry is 16 bytes
+                    for (ulong i = 0; i < dynCount; i++)
+                    {
+                        long tag = *(long*)(start + phdr.Offset + i * 16);
+                        if (tag == 0) break; // DT_NULL
+                        if (tag == 1) // DT_NEEDED
+                        {
+                            blockers.Add("DT_NEEDED present: the ELF links against shared libraries (libc.so.6 and friends). The kernel ships none of them. Rebuild with 'gcc -static-pie' or freestanding with '-nostdlib'.");
+                            break;
+                        }
+                    }
+                }
+            }
+
+            return blockers;
+        }
+
+        /// <summary>
+        /// Throws the first load blocker, if any.
+        /// </summary>
+        private void ValidateLoadable()
+        {
+            List<string> blockers = FindLoadBlockers();
+            if (blockers.Count > 0)
+                throw new ElfException(blockers[0]);
+        }
+
+        /// <summary>
+        /// Computes the address span of the PT_LOAD segments into MinVaddr,
+        /// MaxVaddr and TotalMemSize. Returns false if there are none.
+        /// </summary>
+        private bool ComputeMemorySpan()
         {
             // Reserve the whole address range of the ELF and place every segment at
             // (p_vaddr - MinVaddr), so RIP-relative references between segments
@@ -369,15 +460,27 @@ namespace NewElf.ELF
                     MaxVaddr = end;
             }
 
-            // Ensure we have at least some memory
             if (MinVaddr == ulong.MaxValue || MaxVaddr <= MinVaddr)
-                throw new ElfException("No loadable segments found in ELF");
+                return false;
 
             TotalMemSize = (uint)(MaxVaddr - MinVaddr);
+            return true;
+        }
+
+        private void CalculateMemoryRequirements()
+        {
+            if (!ComputeMemorySpan())
+                throw new ElfException("No loadable segments found in ELF");
+
+            // TotalMemSize is a uint, and LoadOffset below casts to uint too
+            if (MaxVaddr - MinVaddr > uint.MaxValue)
+                throw new ElfException("The ELF spans more than 4 GiB of address space, the loader cannot hold it in one block");
         }
 
         private void LoadSegments()
         {
+            EntryPointFound = false;
+
             foreach (var phdr in ProgramHeaders)
             {
                 if (phdr.Type != (uint)ElfSegmentType.Load)
@@ -405,6 +508,7 @@ namespace NewElf.ELF
                 if (Header.Entry >= phdr.VAddr && Header.Entry < phdr.VAddr + phdr.MemSize)
                 {
                     EntryPointOffset = (uint)(phdr.LoadOffset + (Header.Entry - phdr.VAddr));
+                    EntryPointFound = true;
                 }
             }
         }
@@ -441,7 +545,7 @@ namespace NewElf.ELF
                 return; // no dynamic segment: nothing to relocate
 
             byte* dynStart = FileStart + dynamic.Offset;
-            ulong dynCount = dynamic.FileSize / 16; // Elf64_Dyn is {long tag; ulong val} = 16 bytes
+            ulong dynCount = dynamic.FileSize / 16; // each Elf64_Dyn entry is 16 bytes
 
             ulong relaAddr = ulong.MaxValue; // DT_RELA: vaddr of .rela.dyn
             ulong relaSize = 0;              // DT_RELASZ: total size in bytes
@@ -496,7 +600,11 @@ namespace NewElf.ELF
                         break;
 
                     case ElfX86_64RelocType.R_X86_64_IRELATIVE:
-                        // call the resolver function, store its result
+                        // call the resolver function, store its result.
+                        // It runs before fault isolation is on, so it has to
+                        // stay inside the loaded image.
+                        if ((ulong)rAddend >= TotalMemSize)
+                            throw new ElfException($"IRELATIVE resolver for +0x{rOffset:X} points outside of the loaded image");
                         delegate* unmanaged[Cdecl]<ulong> resolver = (delegate* unmanaged[Cdecl]<ulong>)((byte*)LoadBase + rAddend);
                         *(ulong*)target = resolver();
                         break;
@@ -518,6 +626,10 @@ namespace NewElf.ELF
         {
             if (LoadBase == IntPtr.Zero)
                 throw new ElfException("ELF not loaded");
+
+            // otherwise we would jump into whatever is at the start of the block
+            if (!EntryPointFound)
+                throw new ElfException($"Entry point 0x{Header.Entry:X} does not lie inside any PT_LOAD segment");
 
             // stay on the thread of the first run, see KernelThreadId
             int threadId = Environment.CurrentManagedThreadId;
@@ -775,6 +887,21 @@ namespace NewElf.ELF
                 Console.WriteLine("\nThis ELF is for x86-64 and should be compatible.");
                 Console.ResetColor();
             }
+
+            // show why a run would refuse this file
+            List<string> blockers = FindLoadBlockers();
+            if (blockers.Count > 0)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine();
+                foreach (string blocker in blockers)
+                    Console.WriteLine("WARNING: " + blocker);
+                Console.ResetColor();
+            }
+
+            // fill the span here, otherwise it is only set by a run
+            if (!ComputeMemorySpan())
+                TotalMemSize = 0;
 
             Console.WriteLine($"\nTotal memory required for loading: {TotalMemSize} bytes");
         }
